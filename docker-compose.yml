@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - ai-agent-network
+
+  # Web Service
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - DEBUG=true
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=8000
+      - QDRANT_HOST=qdrant
+      - USE_LOCAL_MESSAGING=true
+    command: python run_web_service.py
+    depends_on:
+      - qdrant
+    networks:
+      - ai-agent-network
+
+  # Processing Service
+  processing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - DEBUG=true
+      - QDRANT_HOST=qdrant
+      - USE_LOCAL_MESSAGING=true
+    command: python run_processing_service.py
+    depends_on:
+      - web
+      - qdrant
+    networks:
+      - ai-agent-network
+
+networks:
+  ai-agent-network:
+    driver: bridge
+
+volumes:
+  qdrant_data: 
