@@ -34,11 +34,11 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: str = Field(default="aiagenthust")
     
     # Messaging settings - RabbitMQ
-    RABBITMQ_HOST: str = Field(default="localhost")
-    RABBITMQ_PORT: int = Field(default=5672)
-    RABBITMQ_USERNAME: str = Field(default="")
-    RABBITMQ_PASSWORD: str = Field(default="")
-    RABBITMQ_VHOST: str = Field(default="")
+    RABBITMQ_HOST: str = Field(default="cougar.rmq.cloudamqp.com")
+    RABBITMQ_PORT: int = Field(default=5671)  # 5671 cho TLS
+    RABBITMQ_USERNAME: str = Field(default="afupjdbk")
+    RABBITMQ_PASSWORD: str = Field(default="Q07Fb5SHeW_U9GbpNA0ojPL5osTGoWse")
+    RABBITMQ_VHOST: str = Field(default="afupjdbk")
     
     # Topic/exchange names
     PDF_PROCESSING_TOPIC: str = Field(default="pdf-processing-topic")
@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     
     # Webhook settings
     WEB_SERVICE_URL: str = Field(default="http://localhost:8000/api/webhook/status-update")
+    
+    # Gmail API settings
+    GMAIL_CREDENTIALS_PATH: str = Field(default="credentials.json")
+    GMAIL_TOKEN_PATH: str = Field(default="token.json")
+    GMAIL_POLL_INTERVAL: int = Field(default=60)  # Seconds
+    
+    # DeepSeek API settings
+    DEEPSEEK_API_KEY: str = Field(default="")
+    DEEPSEEK_API_URL: str = Field(default="https://api.deepseek.com/v1/chat/completions")
+    DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
     
     # Logging settings
     LOG_LEVEL: str = Field(default="INFO")

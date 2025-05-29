@@ -464,3 +464,14 @@ def get_vector_store() -> VectorStore:
     if _vector_store_instance is None:
         _vector_store_instance = VectorStore()
     return _vector_store_instance 
+
+async def get_vector_store_async():
+    """
+    Get the vector store instance asynchronously.
+    This is a wrapper around get_vector_store() for async compatibility.
+    
+    Returns:
+        VectorStore instance
+    """
+    # Reuse the synchronous function 
+    return get_vector_store() 

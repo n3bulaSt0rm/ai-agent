@@ -91,6 +91,9 @@ const FilesList = () => {
   const [totalDocuments, setTotalDocuments] = useState(0);
   const [totalTrash, setTotalTrash] = useState(0);
   
+  // Add function to handle keyword updates
+  const [keywordsInput, setKeywordsInput] = useState('');
+  
   // For now, use the mock data. In a real implementation, this would be API data
   useEffect(() => {
     fetchDocuments(currentDocumentsPage, filterDate);
@@ -232,8 +235,12 @@ const FilesList = () => {
     if (!selectedFile) return;
     
     try {
-      const response = await filesApi.uploadFile(selectedFile, 
-                                               selectedFile.description || 'Uploaded document');
+      const response = await filesApi.uploadFile(
+        selectedFile, 
+        selectedFile.description || 'Uploaded document',
+        selectedFile.fileCreatedAt,
+        selectedFile.keywords
+      );
       
       toast.success(`"${selectedFile.name}" uploaded successfully.`);
       
@@ -332,7 +339,10 @@ const FilesList = () => {
   };
   
   const handleViewDetail = (doc) => {
-    setFileToView(doc);
+    setFileToView({
+      ...doc,
+      keywords: doc.metadata?.keywords || [] // Get keywords from metadata
+    });
     setShowDetailModal(true);
   };
   
@@ -427,6 +437,40 @@ const FilesList = () => {
     } catch (error) {
       console.error('Error filtering by date:', error);
       toast.error('Failed to filter documents');
+    }
+  };
+  
+  // Add function to handle keyword updates
+  const handleKeywordsUpdate = async () => {
+    if (!fileToView) return;
+    
+    try {
+      // Parse keywords into array
+      const keywordArray = keywordsInput
+        .split(',')
+        .map(k => k.trim())
+        .filter(k => k);
+      
+      // Call API to update keywords
+      await filesApi.updateKeywords(fileToView.id, keywordArray);
+      
+      // Update local state
+      setFileToView({
+        ...fileToView,
+        keywords: keywordArray
+      });
+      
+      toast.success('Keywords updated successfully');
+      
+      // Also send to processing service
+      if (fileToView.status === 'processed' || fileToView.status === 'processing') {
+        await filesApi.processFile(fileToView.id);
+        toast.success('Processing service notified of keyword update');
+      }
+      
+    } catch (error) {
+      console.error('Error updating keywords:', error);
+      toast.error('Failed to update keywords');
     }
   };
   
@@ -909,67 +953,103 @@ const FilesList = () => {
       
       {/* File Detail Modal */}
       {showDetailModal && fileToView && (
-        <div className="modal-overlay" onClick={() => setShowDetailModal(false)}>
-          <div className="modal-content detail-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay">
+          <div className="modal-container">
             <div className="modal-header">
               <h2>Document Details</h2>
               <button className="close-btn" onClick={() => setShowDetailModal(false)}>×</button>
             </div>
             <div className="modal-body">
               <div className="detail-grid">
-                <div className="detail-item">
-                  <span className="detail-label">Document Name:</span>
+                <div className="detail-row">
+                  <span className="detail-label">File Name:</span>
                   <span className="detail-value">{fileToView.title}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Link:</span>
-                  <span className="detail-value link">
-                    <a href={fileToView.link} target="_blank" rel="noopener noreferrer">
-                      {fileToView.link}
-                    </a>
-                    <button 
-                      className="copy-link-btn"
-                      onClick={() => copyLink(fileToView)}
-                      title="Copy link"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08M15.75 18.75v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5A3.375 3.375 0 0 0 6.375 7.5H5.25m11.9-3.664A2.251 2.251 0 0 0 15 2.25h-1.5a2.251 2.251 0 0 0-2.15 1.586m5.8 0c.065.21.1.433.1.664v.75h-6V4.5c0-.231.035-.454.1-.664M6.75 7.5H4.875c-.621 0-1.125.504-1.125 1.125v12c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V16.5a9 9 0 0 0-9-9Z" />
-                      </svg>
-                    </button>
-                  </span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">File Size:</span>
+                <div className="detail-row">
+                  <span className="detail-label">Size:</span>
                   <span className="detail-value">{fileToView.size}</span>
                 </div>
-                <div className="detail-item">
+                <div className="detail-row">
                   <span className="detail-label">Pages:</span>
                   <span className="detail-value">{fileToView.pages}</span>
                 </div>
-                <div className="detail-item">
+                <div className="detail-row">
                   <span className="detail-label">Status:</span>
                   <span className="detail-value">{getStatusBadge(fileToView.status)}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Description:</span>
-                  <span className="detail-value">{fileToView.description || 'No description provided'}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">File Created At:</span>
-                  <span className="detail-value">{formatDate(fileToView.fileCreatedAt)}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">Upload At:</span>
+                <div className="detail-row">
+                  <span className="detail-label">Upload Date:</span>
                   <span className="detail-value">{formatDate(fileToView.uploadAt)}</span>
                 </div>
-                <div className="detail-item">
-                  <span className="detail-label">Updated At:</span>
-                  <span className="detail-value">{formatDate(fileToView.updatedAt)}</span>
+                <div className="detail-row">
+                  <span className="detail-label">Created Date:</span>
+                  <span className="detail-value">{formatDate(fileToView.fileCreatedAt)}</span>
+                </div>
+                {fileToView.description && (
+                  <div className="detail-row">
+                    <span className="detail-label">Description:</span>
+                    <span className="detail-value">{fileToView.description}</span>
+                  </div>
+                )}
+                
+                <div className="detail-row keywords-section">
+                  <span className="detail-label">Keywords:</span>
+                  <div className="detail-value keyword-tags">
+                    {fileToView.keywords && fileToView.keywords.length > 0 ? (
+                      fileToView.keywords.map((keyword, index) => (
+                        <span key={index} className="keyword-tag">{keyword}</span>
+                      ))
+                    ) : (
+                      <span className="no-keywords">No keywords</span>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="detail-row keyword-edit-section">
+                  <div className="form-group">
+                    <label htmlFor="keywords">Edit Keywords (comma separated):</label>
+                    <div className="keyword-input-group">
+                      <input 
+                        type="text" 
+                        id="keywords" 
+                        defaultValue={fileToView.keywords ? fileToView.keywords.join(', ') : ''}
+                        onChange={(e) => setKeywordsInput(e.target.value)}
+                        placeholder="Enter keywords separated by commas"
+                        className="form-control"
+                      />
+                      <button 
+                        className="btn-primary save-keywords"
+                        onClick={handleKeywordsUpdate}
+                      >
+                        Update Keywords
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowDetailModal(false)}>Close</button>
+              
+              <div className="detail-actions">
+                <a 
+                  href={fileToView.view_url} 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="btn-secondary"
+                >
+                  <EyeIcon className="w-5 h-5 mr-2" />
+                  View Document
+                </a>
+                {fileToView.status === 'pending_upload' && (
+                  <button 
+                    className="btn-primary"
+                    onClick={() => {
+                      handleProcess(fileToView);
+                      setShowDetailModal(false);
+                    }}
+                  >
+                    Process Document
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

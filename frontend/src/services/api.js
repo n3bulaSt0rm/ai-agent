@@ -55,7 +55,7 @@ const filesApi = {
   },
   
   // Upload a new file
-  uploadFile: async (file, description, fileCreatedAt = null) => {
+  uploadFile: async (file, description, fileCreatedAt = null, keywords = null) => {
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -63,6 +63,10 @@ const filesApi = {
       
       if (fileCreatedAt) {
         formData.append('file_created_at', fileCreatedAt);
+      }
+      
+      if (keywords && keywords.length > 0) {
+        formData.append('keywords', JSON.stringify(keywords));
       }
       
       const response = await apiClient.post('/files/upload', formData, {
@@ -96,6 +100,19 @@ const filesApi = {
       return response.data;
     } catch (error) {
       console.error(`Error updating file ${fileId}:`, error);
+      throw error;
+    }
+  },
+  
+  // Update file keywords
+  updateKeywords: async (fileId, keywords) => {
+    try {
+      const response = await apiClient.put(`/files/update/${fileId}`, {
+        keywords: keywords
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating keywords for file ${fileId}:`, error);
       throw error;
     }
   },

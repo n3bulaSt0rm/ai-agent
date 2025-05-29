@@ -19,12 +19,14 @@ router = APIRouter(prefix="/files", tags=["files"])
 class FileUpdateRequest(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = None
+    keywords: Optional[List[str]] = None
 
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
     description: Optional[str] = Form(None),
-    file_created_at: Optional[str] = Form(None)
+    file_created_at: Optional[str] = Form(None),
+    keywords: Optional[str] = Form(None)
 ):
     """
     Upload a file to S3 and store metadata
@@ -47,12 +49,22 @@ async def upload_file(
         s3_path = f"files/{internal_filename}"
         s3_url = await upload_to_s3(content, s3_path)
         
+        # Parse keywords if provided
+        keyword_list = []
+        if keywords:
+            try:
+                keyword_list = json.loads(keywords)
+            except:
+                # If not valid JSON, try to parse as comma-separated list
+                keyword_list = [k.strip() for k in keywords.split(',') if k.strip()]
+        
         # Create metadata
         metadata = {
             "original_extension": os.path.splitext(file.filename)[1],
             "content_type": file.content_type,
             "upload_timestamp": datetime.now().isoformat(),
-            "uuid": unique_id
+            "uuid": unique_id,
+            "keywords": keyword_list
         }
         
         # Store in database
@@ -84,6 +96,7 @@ async def upload_file(
             "s3_url": s3_url,
             "status": "pending_upload",
             "description": description,
+            "keywords": keyword_list,
             "pages": 0,
             "type": "pdf",
             "uploadedBy": "admin"
@@ -284,6 +297,14 @@ async def list_files(
             # Generate signed URL for viewing
             view_url = get_signed_url(file["s3_url"], expiration=3600)
             
+            # Get metadata as a proper dictionary
+            metadata = file.get("metadata", {})
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except:
+                    metadata = {}
+            
             # Common file structure for all API responses
             formatted_file = {
                 "id": file["id"],
@@ -300,7 +321,8 @@ async def list_files(
                 "link": view_url,
                 "filename": file.get("filename", ""),
                 "s3_url": file.get("s3_url", ""),
-                "view_url": view_url
+                "view_url": view_url,
+                "metadata": metadata  # Include full metadata in response
             }
             
             # Special handling for deleted files
@@ -387,6 +409,14 @@ async def get_file(file_id: int):
         # Generate signed URL for viewing
         view_url = get_signed_url(file["s3_url"], expiration=3600)
         
+        # Get metadata as a proper dictionary
+        metadata = file.get("metadata", {})
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except:
+                metadata = {}
+                
         # Format response to match frontend expectations
         formatted_file = {
             "id": file["id"],
@@ -403,7 +433,8 @@ async def get_file(file_id: int):
             "link": view_url,
             "filename": file["filename"],
             "s3_url": file["s3_url"],
-            "view_url": view_url
+            "view_url": view_url,
+            "metadata": metadata  # Include full metadata in response
         }
         
         # Map status values to what frontend expects
@@ -440,7 +471,14 @@ async def process_file(file_id: int):
         
         # Get metadata
         metadata = file.get("metadata", {})
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except:
+                metadata = {}
+                
         file_uuid = metadata.get("uuid")
+        keywords = metadata.get("keywords", [])
         file_created_at = file.get("file_created_at")
         
         if not file_uuid:
@@ -456,6 +494,8 @@ async def process_file(file_id: int):
         message_data = {
             "file_id": file_uuid,  # Using UUID instead of database ID
             "file_path": file["s3_url"],  # Using S3 URL directly
+            "file_created_at": file_created_at,
+            "keywords": keywords,
             "action": "process"
         }
         
@@ -601,6 +641,47 @@ async def update_file(
                 
             db.update_pdf_status(file_id, file_update.status)
             updates["status"] = file_update.status
+
+        # Update keywords if provided
+        if file_update.keywords is not None:
+            # Get current metadata
+            metadata = file.get("metadata", {})
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except:
+                    metadata = {}
+            
+            # Update keywords in metadata
+            metadata["keywords"] = file_update.keywords
+            
+            # Update metadata in database
+            with db.conn:
+                db.conn.execute(
+                    "UPDATE files_management SET metadata = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(metadata), datetime.now().isoformat(), file_id)
+                )
+            
+            updates["keywords"] = file_update.keywords
+            
+            # Send message to processing service about keyword update
+            metadata = file.get("metadata", {})
+            file_uuid = metadata.get("uuid")
+            
+            if file_uuid:
+                # Get file_created_at for consistency
+                file_created_at = file.get("file_created_at")
+                
+                # Send message to update keywords in processing service
+                message_data = {
+                    "file_id": file_uuid,
+                    "file_path": file["s3_url"],
+                    "keywords": file_update.keywords,
+                    "file_created_at": file_created_at,
+                    "action": "update_keywords"
+                }
+                
+                await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
         return {
             "file_id": file_id,

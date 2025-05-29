@@ -19,15 +19,24 @@ def start_web_service():
     """Khởi động Web Service"""
     logger.info(f"Starting Web Service on {settings.WEB_HOST}:{settings.WEB_PORT}")
     
-    from backend.services.web.server import app
-    
     # Khởi động uvicorn server
-    uvicorn.run(
-        app,
-        host=settings.WEB_HOST,
-        port=settings.WEB_PORT,
-        reload=settings.DEBUG
-    )
+    if settings.DEBUG:
+        # Khi debug mode, sử dụng import string thay vì app object
+        uvicorn.run(
+            "backend.services.web.server:app",
+            host=settings.WEB_HOST,
+            port=settings.WEB_PORT,
+            reload=True
+        )
+    else:
+        # Trong production, có thể sử dụng app object trực tiếp
+        from backend.services.web.server import app
+        uvicorn.run(
+            app,
+            host=settings.WEB_HOST,
+            port=settings.WEB_PORT,
+            reload=False
+        )
 
 if __name__ == "__main__":
     try:

@@ -16,6 +16,7 @@ Hệ thống tuân theo mô hình kiến trúc sạch với sự phân tách rõ
   - `web/` - Dịch vụ API web (FastAPI)
   - `processing/` - Dịch vụ xử lý PDF
   - `messaging/` - Dịch vụ truyền tin (RabbitMQ)
+    - `email_handler.py` - Dịch vụ xử lý email từ Gmail
 - `backend/utils/` - Các module tiện ích (S3, xử lý văn bản, v.v.)
 
 ### Frontend
@@ -32,6 +33,8 @@ Hệ thống tuân theo mô hình kiến trúc sạch với sự phân tách rõ
 - Docker và Docker Compose (tùy chọn)
 - Tài khoản AWS với S3 đã cấu hình (tùy chọn)
 - Tesseract OCR đã cài đặt (cho việc trích xuất văn bản)
+- Tài khoản Gmail và OAuth credentials (cho dịch vụ email)
+- Tài khoản DeepSeek và API key (cho dịch vụ trả lời email)
 
 ### Thiết lập môi trường phát triển
 
@@ -52,12 +55,23 @@ Hệ thống tuân theo mô hình kiến trúc sạch với sự phân tách rõ
    # - AWS_ACCESS_KEY_ID và AWS_SECRET_ACCESS_KEY: thông tin xác thực AWS
    # - S3_BUCKET_NAME: tên bucket Amazon S3
    # - TESSERACT_CMD: đường dẫn đến Tesseract OCR (nếu cần)
+   # - GMAIL_CREDENTIALS_PATH: đường dẫn đến file OAuth credentials
+   # - DEEPSEEK_API_KEY: API key của DeepSeek
    ```
 4. Cài đặt phụ thuộc cho frontend:
    ```
    cd frontend
    npm install
    ```
+
+### Thiết lập Gmail API
+
+1. Tạo project trên Google Cloud Console
+2. Bật Gmail API trong project
+3. Tạo OAuth credentials:
+   - Loại: Desktop application
+   - Tải xuống file credentials.json và lưu vào thư mục gốc dự án
+4. Khi chạy dịch vụ email lần đầu, bạn sẽ được yêu cầu xác thực trong trình duyệt
 
 ## Chạy các dịch vụ
 
@@ -71,6 +85,11 @@ python -m uvicorn backend.services.web.main:app --host 0.0.0.0 --port 8000 --rel
 #### 2. Chạy processing service:
 ```
 python -m backend.services.processing.main
+```
+
+#### 3. Chạy dịch vụ xử lý email:
+```
+python run_gmail_service.py
 ```
 
 ### Chạy frontend thủ công:
@@ -129,15 +148,9 @@ Sau khi khởi động web service, bạn có thể:
 - **Xử lý file**: `/api/files/{id}/process` - Xử lý file đã tải lên
 - **Tìm kiếm ngữ nghĩa**: `/api/query/search` - Tìm kiếm trong nội dung PDF
 
-## Xác thực
-
-Thông tin đăng nhập mặc định:
-- Tên người dùng: admin
-- Mật khẩu: admin123
-
-Nên thay đổi trong file .env cho môi trường sản xuất.
-
 ## Luồng xử lý chính
+
+### Xử lý tài liệu PDF
 
 1. Upload file PDF thông qua web API
 2. File được lưu trữ trong Amazon S3
@@ -147,6 +160,24 @@ Nên thay đổi trong file .env cho môi trường sản xuất.
 6. Vectors được lưu trong Qdrant để tìm kiếm
 7. Metadata được cập nhật trong SQLite
 8. Người dùng có thể thực hiện tìm kiếm ngữ nghĩa trên nội dung đã xử lý
+
+### Xử lý email tự động
+
+1. Dịch vụ email theo dõi các email mới trong hòm thư Gmail
+2. Khi có email mới, dịch vụ trích xuất nội dung
+3. Nội dung được sử dụng để truy vấn Qdrant tìm kiếm thông tin liên quan
+4. Dịch vụ gửi truy vấn và kết quả từ Qdrant đến DeepSeek API
+5. DeepSeek API tạo phản hồi email dựa trên thông tin
+6. Email phản hồi được tạo thành bản nháp trong Gmail
+7. Email gốc được đánh dấu là đã đọc
+
+## Xác thực
+
+Thông tin đăng nhập mặc định:
+- Tên người dùng: admin
+- Mật khẩu: admin123
+
+Nên thay đổi trong file .env cho môi trường sản xuất.
 
 ## Gỡ lỗi và Khắc phục sự cố
 
@@ -164,3 +195,8 @@ Nên thay đổi trong file .env cho môi trường sản xuất.
 - Kiểm tra AWS_ACCESS_KEY_ID và AWS_SECRET_ACCESS_KEY trong .env
 - Xác minh quyền đã đủ cho S3
 - Thử xác thực thủ công với AWS CLI 
+
+### Lỗi Gmail API:
+- Kiểm tra file credentials.json đã tồn tại và đúng cấu trúc
+- Kiểm tra quá trình xác thực đã hoàn tất (token.json đã được tạo)
+- Kiểm tra quyền của ứng dụng trong Google Cloud Console 

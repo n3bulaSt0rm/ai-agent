@@ -18,6 +18,8 @@ const FileUploader = ({
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [fileCreatedAt, setFileCreatedAt] = useState('');
+  const [keywords, setKeywords] = useState('');
 
   // Handle click on the custom button
   const handleButtonClick = () => {
@@ -28,6 +30,16 @@ const FileUploader = ({
   const handleFileChange = (event) => {
     const file = event.target.files[0];
     processFile(file);
+  };
+
+  // Handle keywords change
+  const handleKeywordsChange = (e) => {
+    setKeywords(e.target.value);
+  };
+
+  // Handle date change
+  const handleDateChange = (e) => {
+    setFileCreatedAt(e.target.value);
   };
 
   // Handle drag events
@@ -77,6 +89,13 @@ const FileUploader = ({
     
     // Call the callback function
     if (onFileSelected) {
+      // Parse keywords into array
+      const keywordArray = keywords ? keywords.split(',').map(k => k.trim()).filter(k => k) : [];
+      
+      // Add additional metadata to file object
+      file.fileCreatedAt = fileCreatedAt || '';
+      file.keywords = keywordArray;
+      
       onFileSelected(file);
     }
   };
@@ -117,6 +136,34 @@ const FileUploader = ({
                 <p className="file-size">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
               </div>
             </div>
+            
+            <div className="file-metadata">
+              <div className="form-group">
+                <label htmlFor="fileCreatedAt">File Created Date:</label>
+                <input 
+                  type="date" 
+                  id="fileCreatedAt" 
+                  value={fileCreatedAt} 
+                  onChange={handleDateChange}
+                  className="form-control"
+                  style={{ color: "#000000" }}
+                />
+              </div>
+              
+              <div className="form-group">
+                <label htmlFor="keywords">Keywords (comma separated):</label>
+                <input 
+                  type="text" 
+                  id="keywords" 
+                  value={keywords}
+                  onChange={handleKeywordsChange}
+                  placeholder="Enter keywords separated by commas"
+                  className="form-control"
+                  style={{ color: "#000000" }}
+                />
+              </div>
+            </div>
+            
             <button 
               type="button" 
               className="change-file-btn"

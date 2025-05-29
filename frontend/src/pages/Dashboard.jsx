@@ -79,7 +79,12 @@ const Dashboard = () => {
     if (!selectedFile) return;
     
     try {
-      const response = await filesApi.uploadFile(selectedFile, selectedFile.description || '');
+      const response = await filesApi.uploadFile(
+        selectedFile,
+        selectedFile.description || '',
+        selectedFile.fileCreatedAt,
+        selectedFile.keywords
+      );
       
       toast.success(`"${selectedFile.name}" uploaded successfully.`);
       

@@ -1,0 +1,32 @@
+# CUDA 12.1 requirements
+torch==2.3.0+cu121
+torchvision==0.18.0+cu121
+torchaudio==2.3.0+cu121
+--find-links https://download.pytorch.org/whl/cu121/torch_stable.html
+
+# Requirements for loading model files
+huggingface_hub>=0.23.0
+
+# LangChain and API requirements
+azure-ai-documentintelligence
+langchain-core>=0.1.20
+langchain-deepseek
+langchain-community>=0.0.20
+langchain-text-splitters>=0.0.1
+python-dotenv>=1.0.0
+requests>=2.31.0
+sentence-transformers>=2.2.2
+
+# Vietnamese embedding requirements
+numpy==1.26.4
+tqdm>=4.65.0
+transformers>=4.30.0 
+
+qdrant_client
+
+uvicorn
+fastapi
+python-jose
+python-multipart
+pika
+boto3

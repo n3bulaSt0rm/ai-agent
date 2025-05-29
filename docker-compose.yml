@@ -53,6 +53,30 @@ services:
     networks:
       - ai-agent-network
 
+  # Gmail Handler Service
+  gmail:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./credentials.json:/app/credentials.json
+      - ./token.json:/app/token.json
+    environment:
+      - DEBUG=true
+      - QDRANT_HOST=qdrant
+      - GMAIL_CREDENTIALS_PATH=/app/credentials.json
+      - GMAIL_TOKEN_PATH=/app/token.json
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    command: python run_gmail_service.py
+    depends_on:
+      - web
+      - qdrant
+      - processing
+    networks:
+      - ai-agent-network
+
 networks:
   ai-agent-network:
     driver: bridge
