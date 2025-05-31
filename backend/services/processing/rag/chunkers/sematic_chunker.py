@@ -6,12 +6,27 @@ import os
 import re
 from typing import List, Dict, Any
 
+# Đặt đường dẫn đến thư mục NLTK data
+nltk.data.path.append("/home/n3bulast0rm/Documents/Projects/DATN/ai-agent/.venv.production/nltk_data")
+
+# Simple Vietnamese sentence tokenizer function to avoid NLTK issues
+def simple_tokenize(text):
+    """Simple sentence tokenizer for Vietnamese text"""
+    # This regex pattern matches Vietnamese sentences ending with punctuation
+    pattern = r'(?<=[.!?;])\s+'
+    sentences = re.split(pattern, text)
+    # Further clean and filter empty strings
+    return [s.strip() for s in sentences if s.strip()]
+
 class ProtonxSemanticChunker:
     def __init__(self, threshold=0.3, model="bkai-foundation-models/vietnamese-bi-encoder"):
         self.threshold = threshold
         self.model = SentenceTransformer(model)
         # Download punkt for sentence tokenization, ensuring it's only done when class is initialized
-        nltk.download("punkt", quiet=True)
+        try:
+            nltk.download("punkt", quiet=True)
+        except:
+            pass # Suppressed because we'll use simple_tokenize as fallback
 
     def embed_function(self, sentences):
         """
@@ -20,7 +35,16 @@ class ProtonxSemanticChunker:
         return self.model.encode(sentences)
 
     def split_text(self, text):
-        sentences = nltk.sent_tokenize(text)  # Extract sentences
+        """
+        Split text into semantic chunks.
+        """
+        try:
+            # Try NLTK first
+            sentences = nltk.sent_tokenize(text)
+        except:
+            # Fall back to simple tokenizer on any error
+            sentences = simple_tokenize(text)
+            
         sentences = [item for item in sentences if item and item.strip()]
         if not len(sentences):
             return []

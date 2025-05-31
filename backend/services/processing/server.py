@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 # Third-party imports
 import httpx
+from aiohttp import web
 
 # Configure logging before other imports
 logging.basicConfig(
@@ -44,6 +45,9 @@ DATA_DIR.mkdir(exist_ok=True)
 SEMANTIC_CHUNKER_THRESHOLD = 0.3
 SEMANTIC_CHUNKER_MODEL = "bkai-foundation-models/vietnamese-bi-encoder"
 QDRANT_BATCH_SIZE = 8
+
+# Set Processing Service port
+PROCESSING_PORT = 8081
 
 
 async def send_status_update(file_id: str, status: str) -> bool:
@@ -217,7 +221,7 @@ async def embed_and_store_chunks(
     embedding_module = VietnameseEmbeddingModule(
         qdrant_host=settings.QDRANT_HOST,
         qdrant_port=settings.QDRANT_PORT,
-        collection_name=settings.QDRANT_COLLECTION
+        collection_name=settings.QDRANT_COLLECTION_NAME
     )
     
     # Add metadata for Qdrant storage
@@ -279,7 +283,17 @@ async def process_document(message_data: Dict[str, Any]) -> None:
     logger.info(f"Started processing document: {file_id} at {file_path}")
     
     # Update status to processing
-    await send_status_update(file_id, "processing")
+    # await send_status_update(file_id, "processing")
+    
+    page_range_str = None
+    if page_range:
+        if isinstance(page_range, dict) and 'start' in page_range and 'end' in page_range:
+            page_range_str = f"{page_range['start']}-{page_range['end']}"
+            logger.info(f"Converting page range from {page_range} to string format: {page_range_str}")
+        elif isinstance(page_range, str):
+            page_range_str = page_range
+        else:
+            logger.warning(f"Unexpected page_range format: {type(page_range)} - {page_range}")
     
     try:
         # Generate a processing ID for tracing
@@ -287,7 +301,7 @@ async def process_document(message_data: Dict[str, Any]) -> None:
         logger.info(f"Processing ID: {processing_id}")
         
         # Step 1: Extract text from document
-        markdown_content = await extract_text(file_path, page_range)
+        markdown_content = await extract_text(file_path, page_range_str)
         
         # Step 2: Process tables
         markdown_content = await process_tables(markdown_content)
@@ -336,7 +350,7 @@ async def mark_document_deleted(message_data: Dict[str, Any]) -> None:
         embedding_module = VietnameseEmbeddingModule(
             qdrant_host=settings.QDRANT_HOST,
             qdrant_port=settings.QDRANT_PORT,
-            collection_name=settings.QDRANT_COLLECTION
+            collection_name=settings.QDRANT_COLLECTION_NAME
         )
         
         # Update is_deleted flag for all vectors with this file_id
@@ -393,6 +407,13 @@ async def main() -> None:
     logger.info("Starting processing service...")
     
     try:
+        # Create a simple web app
+        app = web.Application()
+        
+        # Add routes for health checks
+        app.router.add_get("/", lambda request: web.Response(text="Processing Service Running"))
+        app.router.add_get("/health", lambda request: web.Response(text="OK"))
+        
         # Create subscription to the processing topic
         await create_subscription(
             settings.PDF_PROCESSING_TOPIC,
@@ -410,6 +431,14 @@ async def main() -> None:
         except Exception as e:
             logger.error(f"Failed to start Gmail monitoring service: {e}", exc_info=True)
             # Continue with the processing service even if Gmail monitoring fails
+        
+        # Start web server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PROCESSING_PORT)
+        await site.start()
+        
+        logger.info(f"Processing service web server running on port {PROCESSING_PORT}")
         
         # Keep the service running
         while True:

@@ -46,34 +46,34 @@ class Settings(BaseSettings):
     # Qdrant settings
     QDRANT_HOST: str = Field(default="localhost")
     QDRANT_PORT: int = Field(default=6333)
-    QDRANT_COLLECTION_NAME: str = Field(default="regulations")
-    
-    # OCR settings
-    TESSERACT_CMD: Optional[str] = Field(default=None) 
-    TESSERACT_LANG: str = Field(default="vie")
+    QDRANT_COLLECTION_NAME: str = Field(default="vietnamese_chunks_test")
     
     # Processing settings
     EMBEDDING_MODEL: str = Field(default="sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
     CHUNK_SIZE: int = Field(default=1000)
     CHUNK_OVERLAP: int = Field(default=200)
     PROCESSING_THREADS: int = Field(default=2)
-    
+
     # Webhook settings
     WEB_SERVICE_URL: str = Field(default="http://localhost:8000/api/webhook/status-update")
     
     # Gmail API settings
-    GMAIL_CREDENTIALS_PATH: str = Field(default="credentials.json")
+    GMAIL_CREDENTIALS_PATH: str = Field(default="secret/credentials.json")
     GMAIL_TOKEN_PATH: str = Field(default="token.json")
     GMAIL_POLL_INTERVAL: int = Field(default=60)  # Seconds
     
     # DeepSeek API settings
     DEEPSEEK_API_KEY: str = Field(default="")
-    DEEPSEEK_API_URL: str = Field(default="https://api.deepseek.com/v1/chat/completions")
+    DEEPSEEK_API_URL: str = Field(default="https://api.deepseek.com/v1/chat/completions", description="DeepSeek API endpoint")
     DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
     
     # Logging settings
     LOG_LEVEL: str = Field(default="INFO")
     
+    # Azure Document Intelligence API settings
+    AZURE_DOCUMENT_ENDPOINT: str = Field(default="", description="Azure Document Intelligence endpoint")
+    AZURE_DOCUMENT_KEY: str = Field(default="", description="Azure Document Intelligence API key")
+
     class Config:
         env_file = os.path.join(BASE_DIR, ".env")
         env_file_encoding = "utf-8"

@@ -1,17 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.responses import JSONResponse
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import os
 import uuid
 from datetime import datetime
 from pydantic import BaseModel
 import json
 import traceback
+import io
+from PyPDF2 import PdfReader
 
 from backend.core.config import settings
 from backend.db.metadata import get_metadata_db
 from backend.services.messaging import publish_message
-from backend.utils.s3 import upload_to_s3, get_signed_url
+from backend.utils.s3 import upload_to_s3, upload_to_s3_public, get_signed_url
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -19,7 +21,10 @@ router = APIRouter(prefix="/files", tags=["files"])
 class FileUpdateRequest(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = None
-    keywords: Optional[List[str]] = None
+    keywords: Optional[Union[str, List[str]]] = None
+
+class ProcessFileRequest(BaseModel):
+    page_ranges: Optional[List[Dict[str, int]]] = None  # List of {start: int, end: int}
 
 @router.post("/upload")
 async def upload_file(
@@ -35,28 +40,36 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     try:
-        # Generate unique filename to avoid collisions
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        # Generate unique identifier but keep original filename
         unique_id = str(uuid.uuid4())
         safe_filename = file.filename.replace(" ", "_").lower()
-        internal_filename = f"{timestamp}_{unique_id[:8]}_{safe_filename}"
         
         # Read file content
         content = await file.read()
         file_size = len(content)
         
-        # Upload to S3
-        s3_path = f"files/{internal_filename}"
-        s3_url = await upload_to_s3(content, s3_path)
+        # Count pages in PDF
+        pdf_pages = 0
+        try:
+            pdf = PdfReader(io.BytesIO(content))
+            pdf_pages = len(pdf.pages)
+        except Exception as e:
+            print(f"Warning: Could not read PDF pages: {str(e)}")
         
-        # Parse keywords if provided
-        keyword_list = []
-        if keywords:
-            try:
-                keyword_list = json.loads(keywords)
-            except:
-                # If not valid JSON, try to parse as comma-separated list
-                keyword_list = [k.strip() for k in keywords.split(',') if k.strip()]
+        # Upload to S3 with public-read ACL
+        s3_path = f"files/{unique_id}_{safe_filename}"
+        s3_url = await upload_to_s3(content, s3_path)  # Keep original s3_url for internal use
+        
+        # Get direct public URL
+        public_url = await upload_to_s3_public(content, s3_path)
+        
+        # Process keywords - simply use provided string directly
+        keywords_str = keywords or ""
+        # Clean up keywords string: remove extra spaces, ensure comma separation
+        keywords_str = ",".join([k.strip() for k in keywords_str.split(',') if k.strip()])
+        
+        # Parse keywords into list for response
+        keyword_list = [k.strip() for k in keywords_str.split(',') if k.strip()] if keywords_str else []
         
         # Create metadata
         metadata = {
@@ -64,7 +77,7 @@ async def upload_file(
             "content_type": file.content_type,
             "upload_timestamp": datetime.now().isoformat(),
             "uuid": unique_id,
-            "keywords": keyword_list
+            "keywords": keywords_str
         }
         
         # Store in database
@@ -73,31 +86,34 @@ async def upload_file(
         current_time = datetime.now().isoformat()
         
         file_id = db.add_pdf_file(
-            filename=internal_filename,
-            original_filename=file.filename,
+            filename=safe_filename,
             file_size=file_size,
-            file_type=file.content_type or "application/pdf",
-            s3_url=s3_url,
+            content_type=file.content_type or "application/pdf",
+            s3_uri=s3_url,
+            object_url=public_url,  # Use public URL here
             description=description,
             file_created_at=file_created_at or current_time,
-            metadata=metadata
+            keywords=keywords_str,
+            uuid=unique_id,
+            pages=pdf_pages
         )
         
         # Format response to match frontend expectations
         return {
             "id": file_id,
             "title": file.filename,
-            "filename": internal_filename,
+            "filename": safe_filename,
             "size": f"{round(file_size / 1024 / 1024, 2)} MB",
             "uploadAt": current_time,
             "fileCreatedAt": file_created_at or current_time,
             "updatedAt": current_time,
             "uuid": unique_id,
             "s3_url": s3_url,
+            "object_url": public_url,  # Include public URL in response
             "status": "pending_upload",
             "description": description,
             "keywords": keyword_list,
-            "pages": 0,
+            "pages": pdf_pages,
             "type": "pdf",
             "uploadedBy": "admin"
         }
@@ -141,6 +157,10 @@ async def list_files(
             if query:
                 files = db.search_pdf_files(query, limit=limit, offset=offset, status=status)
                 total_count = len(files)
+                print(f"Search results: Found {len(files)} files matching '{query}'")
+                if files:
+                    # Log keywords from first result for debugging
+                    print(f"First result keywords (raw): {files[0].get('keywords')}")
                 
             # 2. Filter by date
             elif date:
@@ -181,8 +201,6 @@ async def list_files(
                 # Parse results
                 for row in cursor:
                     file_data = dict(row)
-                    if file_data.get('metadata'):
-                        file_data['metadata'] = json.loads(file_data['metadata'])
                     files.append(file_data)
                 
                 # Get total count
@@ -256,8 +274,6 @@ async def list_files(
                 # Parse results
                 for row in cursor:
                     file_data = dict(row)
-                    if file_data.get('metadata'):
-                        file_data['metadata'] = json.loads(file_data['metadata'])
                     files.append(file_data)
                 
                 # Get total count with same status filter
@@ -291,44 +307,45 @@ async def list_files(
             print(f"Traceback: {traceback_str}")
             raise HTTPException(status_code=500, detail=f"Database error: {str(db_error)}")
             
-        # Format response to match frontend expectations
-        formatted_files = []
-        for file in files:
+        # Format files for frontend
+        response_files = []
+        for file_data in files:
             # Generate signed URL for viewing
-            view_url = get_signed_url(file["s3_url"], expiration=3600)
+            view_url = get_signed_url(file_data["s3_uri"], expiration=3600)
             
-            # Get metadata as a proper dictionary
-            metadata = file.get("metadata", {})
-            if isinstance(metadata, str):
-                try:
-                    metadata = json.loads(metadata)
-                except:
-                    metadata = {}
+            # Parse keywords if present
+            keywords = []
+            if file_data.get("keywords"):
+                # Parse comma-separated string to list
+                keywords = [k.strip() for k in file_data.get("keywords").split(',') if k.strip()]
+                print(f"Processing file {file_data['id']} with keywords: {file_data.get('keywords')} -> {keywords}")
             
-            # Common file structure for all API responses
+            # Format for frontend
             formatted_file = {
-                "id": file["id"],
-                "title": file["original_filename"],
-                "size": f"{round(file['file_size'] / 1024 / 1024, 2)} MB",
-                "uploadAt": file["upload_at"],
-                "status": file["status"],
-                "pages": file["pages"] or 0,
+                "id": file_data["id"],
+                "title": file_data["filename"],
+                "size": f"{round(file_data['file_size'] / 1024 / 1024, 2)} MB",
+                "uploadAt": file_data["upload_at"],
+                "fileCreatedAt": file_data.get("file_created_at", file_data["upload_at"]),
+                "updatedAt": file_data.get("updated_at", file_data["upload_at"]),
+                "status": file_data["status"],
+                "description": file_data.get("description", ""),
+                "pages": file_data.get("pages", 0),
                 "type": "pdf",
-                "uploadedBy": file.get("uploaded_by", "admin"),
-                "description": file.get("description", ""),
-                "fileCreatedAt": file.get("file_created_at", file["upload_at"]),
-                "updatedAt": file.get("updated_at", file["upload_at"]),
+                "uuid": file_data.get("uuid", ""),
+                "uploadedBy": file_data.get("uploaded_by", "admin"),
+                "keywords": keywords,
+                "pages_processed_range": file_data.get("pages_processed_range", ""),
                 "link": view_url,
-                "filename": file.get("filename", ""),
-                "s3_url": file.get("s3_url", ""),
-                "view_url": view_url,
-                "metadata": metadata  # Include full metadata in response
+                "filename": file_data["filename"],
+                "s3_uri": file_data["s3_uri"],
+                "view_url": view_url
             }
             
             # Special handling for deleted files
-            if file["status"] == "deleted":
-                formatted_file["deletedDate"] = file.get("updated_at", file["upload_at"])
-                formatted_file["deletedBy"] = file.get("uploaded_by", "admin")
+            if file_data["status"] == "deleted":
+                formatted_file["deletedDate"] = file_data.get("updated_at", file_data["upload_at"])
+                formatted_file["deletedBy"] = file_data.get("uploaded_by", "admin")
             
             # Map status values to what frontend expects
             if formatted_file["status"] == "processed":
@@ -338,11 +355,11 @@ async def list_files(
             elif formatted_file["status"] != "deleted":
                 formatted_file["status"] = "pending_upload"
             
-            formatted_files.append(formatted_file)
+            response_files.append(formatted_file)
         
-        # Return formatted database results
+        # Return response with pagination info
         response = {
-            "files": formatted_files,
+            "files": response_files,
             "total": total_count,
             "limit": limit,
             "offset": offset
@@ -407,20 +424,18 @@ async def get_file(file_id: int):
             raise HTTPException(status_code=404, detail="File not found")
         
         # Generate signed URL for viewing
-        view_url = get_signed_url(file["s3_url"], expiration=3600)
+        view_url = get_signed_url(file["s3_uri"], expiration=3600)
         
-        # Get metadata as a proper dictionary
-        metadata = file.get("metadata", {})
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except:
-                metadata = {}
+        # Parse keywords if present
+        keywords = []
+        if file.get("keywords"):
+            # Parse comma-separated string to list
+            keywords = [k.strip() for k in file.get("keywords").split(',') if k.strip()]
                 
         # Format response to match frontend expectations
         formatted_file = {
             "id": file["id"],
-            "title": file["original_filename"],
+            "title": file["filename"],
             "size": f"{round(file['file_size'] / 1024 / 1024, 2)} MB",
             "uploadAt": file["upload_at"],
             "status": file["status"],
@@ -432,9 +447,10 @@ async def get_file(file_id: int):
             "updatedAt": file.get("updated_at", file["upload_at"]),
             "link": view_url,
             "filename": file["filename"],
-            "s3_url": file["s3_url"],
+            "s3_uri": file["s3_uri"],
             "view_url": view_url,
-            "metadata": metadata  # Include full metadata in response
+            "keywords": keywords,
+            "pages_processed_range": file.get("pages_processed_range")
         }
         
         # Map status values to what frontend expects
@@ -452,9 +468,9 @@ async def get_file(file_id: int):
         raise HTTPException(status_code=500, detail=f"Failed to get file: {str(e)}")
 
 @router.post("/{file_id}/process")
-async def process_file(file_id: int):
+async def process_file(file_id: int, process_request: Optional[ProcessFileRequest] = None):
     """
-    Send a file for processing
+    Send a file for processing with optional page ranges
     """
     try:
         db = get_metadata_db()
@@ -466,44 +482,112 @@ async def process_file(file_id: int):
         if file["status"] == "processing":
             raise HTTPException(status_code=400, detail="File is already being processed")
         
+        # Get total pages
+        total_pages = file.get("pages", 0)
+        
+        # Get existing processed page ranges if any
+        current_ranges = []
+        if file.get("pages_processed_range"):
+            try:
+                current_ranges = json.loads(file["pages_processed_range"])
+                if not isinstance(current_ranges, list):
+                    current_ranges = []
+            except:
+                current_ranges = []
+        
+        # Determine page ranges to process
+        page_ranges_to_process = []
+        
+        if process_request and process_request.page_ranges:
+            # User specified page ranges
+            page_ranges_to_process = process_request.page_ranges
+            
+            # Validate page ranges
+            for page_range in page_ranges_to_process:
+                if not isinstance(page_range, dict) or "start" not in page_range or "end" not in page_range:
+                    raise HTTPException(status_code=400, detail="Invalid page range format. Expected {start: int, end: int}")
+                
+                start = page_range["start"]
+                end = page_range["end"]
+                
+                if not isinstance(start, int) or not isinstance(end, int):
+                    raise HTTPException(status_code=400, detail="Page range start and end must be integers")
+                
+                if start < 1 or end > total_pages or start > end:
+                    raise HTTPException(status_code=400, 
+                        detail=f"Invalid page range: {start}-{end}. Document has {total_pages} pages.")
+                
+                # Check if range overlaps with already processed ranges
+                for processed_range in current_ranges:
+                    p_start = processed_range["start"]
+                    p_end = processed_range["end"]
+                    
+                    if (start <= p_end and end >= p_start):
+                        raise HTTPException(status_code=400, 
+                            detail=f"Page range {start}-{end} overlaps with already processed range {p_start}-{p_end}")
+        else:
+            # No ranges specified, process all pages that haven't been processed yet
+            if not current_ranges and total_pages > 0:
+                # Process entire document
+                page_ranges_to_process = [{"start": 1, "end": total_pages}]
+            elif total_pages > 0:
+                # Find unprocessed ranges
+                sorted_ranges = sorted(current_ranges, key=lambda r: r["start"])
+                
+                # Check from beginning of document
+                if sorted_ranges[0]["start"] > 1:
+                    page_ranges_to_process.append({"start": 1, "end": sorted_ranges[0]["start"] - 1})
+                
+                # Check between processed ranges
+                for i in range(len(sorted_ranges) - 1):
+                    if sorted_ranges[i]["end"] + 1 < sorted_ranges[i+1]["start"]:
+                        page_ranges_to_process.append({
+                            "start": sorted_ranges[i]["end"] + 1,
+                            "end": sorted_ranges[i+1]["start"] - 1
+                        })
+                
+                # Check end of document
+                if sorted_ranges[-1]["end"] < total_pages:
+                    page_ranges_to_process.append({"start": sorted_ranges[-1]["end"] + 1, "end": total_pages})
+        
+        if not page_ranges_to_process:
+            return {"message": "No page ranges to process", "status": file["status"]}
+        
         # Update status to processing
         db.update_pdf_status(file_id, "processing")
         
-        # Get metadata
-        metadata = file.get("metadata", {})
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except:
-                metadata = {}
+        # Get keywords from the database
+        keywords_str = file.get("keywords")
+        keywords = []
+        if keywords_str:
+            # Convert comma-separated string to list
+            keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
                 
-        file_uuid = metadata.get("uuid")
-        keywords = metadata.get("keywords", [])
+        file_uuid = file.get("uuid")
         file_created_at = file.get("file_created_at")
         
-        if not file_uuid:
-            file_uuid = str(uuid.uuid4())
-            metadata["uuid"] = file_uuid
-            with db.conn:
-                db.conn.execute(
-                    "UPDATE files_management SET metadata = ? WHERE id = ?",
-                    (json.dumps(metadata), file_id)
-                )
+        # Update processed page ranges
+        new_processed_ranges = current_ranges + page_ranges_to_process
+        db.update_pdf_status(file_id, "processing", pages_processed_range=json.dumps(new_processed_ranges))
         
-        # Send processing request via messaging service (simplified message format)
-        message_data = {
-            "file_id": file_uuid,  # Using UUID instead of database ID
-            "file_path": file["s3_url"],  # Using S3 URL directly
-            "file_created_at": file_created_at,
-            "keywords": keywords,
-            "action": "process"
-        }
-        
-        await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+        # Send processing requests for each page range
+        for page_range in page_ranges_to_process:
+            # Send processing request via messaging service
+            message_data = {
+                "file_id": file_uuid,
+                "file_path": file["object_url"] if file.get("object_url") else file["s3_uri"],  # Use object_url if available
+                "file_created_at": file_created_at,
+                "keywords": keywords,
+                "action": "process",
+                "page_range": page_range
+            }
+            
+            await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
         return {
             "message": f"File {file_id} sent for processing",
-            "status": "processing"
+            "status": "processing",
+            "page_ranges": page_ranges_to_process
         }
     except HTTPException:
         raise
@@ -538,14 +622,13 @@ async def delete_file(file_id: int):
         # Update status to deleted
         db.update_pdf_status(file_id, "deleted", previous_status=previous_status)
         
-        # Get metadata
-        metadata = file.get("metadata", {})
-        file_uuid = metadata.get("uuid")
+        # Get UUID from file
+        file_uuid = file.get("uuid")
         
         if file_uuid:
             # Send message to update vectors in Qdrant (simplified message format)
             message_data = {
-                "file_id": file_uuid,  # Using UUID instead of database ID
+                "file_id": file_uuid,
                 "action": "delete"
             }
             
@@ -582,15 +665,14 @@ async def restore_file(file_id: int):
         # Update status
         db.update_pdf_status(file_id, new_status)
         
-        # Get metadata
-        metadata = file.get("metadata", {})
-        file_uuid = metadata.get("uuid")
+        # Get UUID from file
+        file_uuid = file.get("uuid")
         
         if file_uuid:
             # Send message to restore vectors in Qdrant (simplified message format)
             message_data = {
-                "file_id": file_uuid,  # Using UUID instead of database ID
-                "file_path": file["s3_url"],  # Using S3 URL directly
+                "file_id": file_uuid,
+                "file_path": file["object_url"] if file.get("object_url") else file["s3_uri"],  # Use object_url if available
                 "action": "restore"
             }
             
@@ -614,6 +696,7 @@ async def update_file(
     Update file metadata
     """
     try:
+        print(f"Received update request for file {file_id}: {file_update}")
         db = get_metadata_db()
         file = db.get_pdf_file(file_id)
         
@@ -644,44 +727,49 @@ async def update_file(
 
         # Update keywords if provided
         if file_update.keywords is not None:
-            # Get current metadata
-            metadata = file.get("metadata", {})
-            if isinstance(metadata, str):
-                try:
-                    metadata = json.loads(metadata)
-                except:
-                    metadata = {}
+            print(f"Updating keywords for file {file_id}: {file_update.keywords}")
             
-            # Update keywords in metadata
-            metadata["keywords"] = file_update.keywords
+            if isinstance(file_update.keywords, list):
+                # Convert list to comma-separated string
+                keywords_str = ','.join(file_update.keywords)
+            else:
+                # Already a string, normalize it
+                keywords_str = ','.join([k.strip() for k in file_update.keywords.split(',') if k.strip()])
+                
+            print(f"Keywords string: {keywords_str}")
             
-            # Update metadata in database
+            # Update keywords in database
             with db.conn:
                 db.conn.execute(
-                    "UPDATE files_management SET metadata = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(metadata), datetime.now().isoformat(), file_id)
+                    "UPDATE files_management SET keywords = ?, updated_at = ? WHERE id = ?",
+                    (keywords_str, datetime.now().isoformat(), file_id)
                 )
             
-            updates["keywords"] = file_update.keywords
+            # Convert string back to list for consistent response
+            keyword_list = [k.strip() for k in keywords_str.split(',') if k.strip()] if keywords_str else []
+            updates["keywords"] = keyword_list
             
             # Send message to processing service about keyword update
-            metadata = file.get("metadata", {})
-            file_uuid = metadata.get("uuid")
+            file_uuid = file.get("uuid")
+            file_path = file.get("object_url") if file.get("object_url") else file.get("s3_uri")  # Use object_url if available
             
             if file_uuid:
-                # Get file_created_at for consistency
+                # Get file_created_at for consistency 
                 file_created_at = file.get("file_created_at")
                 
                 # Send message to update keywords in processing service
                 message_data = {
                     "file_id": file_uuid,
-                    "file_path": file["s3_url"],
-                    "keywords": file_update.keywords,
+                    "file_path": file_path,
+                    "keywords": keyword_list,
                     "file_created_at": file_created_at,
                     "action": "update_keywords"
                 }
                 
                 await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+                
+                # Log success
+                print(f"Message sent to processing service for file {file_id} with keywords: {keyword_list}")
         
         return {
             "file_id": file_id,

@@ -2,6 +2,6 @@
 OpenAI Model Package
 """
 
-from src.models.openai.main import OpenAIModel
+from backend.services.processing.rag.models.openai.main import OpenAIModel
 
 __all__ = ["OpenAIModel"] 

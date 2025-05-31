@@ -4,11 +4,11 @@ LLM Models for RAG Pipeline
 This package contains different LLM implementations for the RAG pipeline.
 """
 
-from src.models.base_model import BaseModel
-from src.models.openai.main import OpenAIModel
-from src.models.deepseek.main import DeepSeekModel
-from src.models.gemini.main import GeminiModel
-from src.models.config import get_model_config
+from backend.services.processing.rag.models.base_model import BaseModel
+from backend.services.processing.rag.models.openai.main import OpenAIModel
+from backend.services.processing.rag.models.deepseek.main import DeepSeekModel
+from backend.services.processing.rag.models.gemini.main import GeminiModel
+from backend.services.processing.rag.models.config import get_model_config
 
 def create_openai_model(config=None):
     """

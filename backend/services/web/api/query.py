@@ -75,8 +75,8 @@ async def query_documents(
                 if file:
                     file_info = {
                         "id": file["id"],
-                        "filename": file["original_filename"],
-                        "upload_date": file["upload_date"],
+                        "filename": file["filename"],
+                        "upload_date": file["upload_at"],
                         "status": file["status"]
                     }
             
@@ -180,7 +180,7 @@ async def query_file_content(
         
         return {
             "file_id": file_id,
-            "filename": file["original_filename"],
+            "filename": file["filename"],
             "query": q,
             "page": page,
             "results": processed_results,

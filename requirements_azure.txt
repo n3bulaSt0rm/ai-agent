@@ -29,4 +29,12 @@ fastapi
 python-jose
 python-multipart
 pika
+pandas
 boto3
+tabulate
+nltk
+PyPDF2
+
+google-auth
+google-api-python-client
+google-auth-oauthlib

@@ -66,7 +66,8 @@ const filesApi = {
       }
       
       if (keywords && keywords.length > 0) {
-        formData.append('keywords', JSON.stringify(keywords));
+        // Send keywords as a comma-separated string
+        formData.append('keywords', keywords.join(','));
       }
       
       const response = await apiClient.post('/files/upload', formData, {
@@ -83,9 +84,16 @@ const filesApi = {
   },
   
   // Process a file
-  processFile: async (fileId) => {
+  processFile: async (fileId, options = null) => {
     try {
-      const response = await apiClient.post(`/files/${fileId}/process`);
+      let response;
+      if (options && options.page_ranges) {
+        // Send with page ranges
+        response = await apiClient.post(`/files/${fileId}/process`, options);
+      } else {
+        // Backward compatibility for calls without page ranges
+        response = await apiClient.post(`/files/${fileId}/process`);
+      }
       return response.data;
     } catch (error) {
       console.error(`Error processing file ${fileId}:`, error);
@@ -107,8 +115,13 @@ const filesApi = {
   // Update file keywords
   updateKeywords: async (fileId, keywords) => {
     try {
+      console.log("Updating keywords for file", fileId, "with:", keywords);
+      
+      // Check if keywords is an array and convert to string if needed
+      const keywordsData = Array.isArray(keywords) ? keywords.join(',') : keywords;
+      
       const response = await apiClient.put(`/files/update/${fileId}`, {
-        keywords: keywords
+        keywords: keywordsData
       });
       return response.data;
     } catch (error) {

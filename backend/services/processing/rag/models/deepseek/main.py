@@ -4,12 +4,11 @@ DeepSeek Model for RAG Pipeline
 
 import logging
 import requests
-import sys
 import os
 
-# Add parent directory to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_model import BaseModel
+# Import from the central config
+from backend.core.config import settings
+from backend.services.processing.rag.models.base_model import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +37,8 @@ Câu hỏi: {query}
 
 Trả lời:"""
             
-            # API endpoint
-            url = "https://api.deepseek.com/v1/chat/completions"
+            # API endpoint from settings
+            url = settings.DEEPSEEK_API_URL
             
             # Request headers
             headers = {

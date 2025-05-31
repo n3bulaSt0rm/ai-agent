@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import '../styles/FileDetail.css';
+import filesApi from '../services/api';
+import { toast } from 'react-hot-toast';
+
+// Import icons
+import TrashIcon from '@heroicons/react/24/outline/TrashIcon';
 
 // Mock data
 const mockDocuments = [
@@ -51,23 +56,38 @@ const FileDetail = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showProcessModal, setShowProcessModal] = useState(false);
+  const [pageRanges, setPageRanges] = useState([{ start: 1, end: 1 }]);
+  const [pageRangeError, setPageRangeError] = useState("");
   
   useEffect(() => {
-    // Simulate API call to fetch document details
+    // Fetch document details
     const fetchDocument = async () => {
       setLoading(true);
       try {
-        // In a real app, you would fetch data from an API
-        const doc = mockDocuments.find(doc => doc.id === parseInt(id));
+        const data = await filesApi.getFile(parseInt(id));
         
-        if (doc) {
-          setDocument(doc);
+        if (data) {
+          setDocument(data);
+          
+          // If we have pages_processed_range, initialize it
+          if (data.pages_processed_range) {
+            try {
+              // Parse the JSON string into an array
+              const processedRanges = JSON.parse(data.pages_processed_range);
+              console.log("Processed ranges:", processedRanges);
+            } catch (e) {
+              console.error("Error parsing processed ranges:", e);
+            }
+          }
         } else {
           // Document not found
           navigate('/files', { replace: true });
         }
       } catch (error) {
         console.error('Error fetching document:', error);
+        toast.error('Failed to load document details');
+        navigate('/files', { replace: true });
       } finally {
         setLoading(false);
       }
@@ -80,10 +100,179 @@ const FileDetail = () => {
     setShowDeleteConfirm(true);
   };
   
-  const confirmDelete = () => {
-    // In a real app, you would make an API call to delete the document
-    setShowDeleteConfirm(false);
-    navigate('/files', { replace: true });
+  const confirmDelete = async () => {
+    try {
+      await filesApi.deleteFile(parseInt(id));
+      toast.success(`Document moved to trash`);
+      setShowDeleteConfirm(false);
+      navigate('/files', { replace: true });
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      toast.error('Failed to delete document');
+    }
+  };
+  
+  const handleProcess = () => {
+    if (!document || !document.pages) {
+      toast.error('Cannot process document without page information');
+      return;
+    }
+    
+    // Get existing processed ranges if any
+    const existingRanges = [];
+    if (document.pages_processed_range) {
+      try {
+        const ranges = JSON.parse(document.pages_processed_range);
+        if (Array.isArray(ranges) && ranges.length > 0) {
+          existingRanges.push(...ranges);
+        }
+      } catch (e) {
+        console.error("Error parsing processed ranges:", e);
+      }
+    }
+    
+    // If document has no pages yet, set a default range
+    if (existingRanges.length === 0) {
+      // No existing ranges, process the whole document
+      setPageRanges([{ start: 1, end: document.pages }]);
+    } else {
+      // Find unprocessed ranges
+      const sortedRanges = existingRanges.sort((a, b) => a.start - b.start);
+      const unprocessedRanges = [];
+      
+      // Check from beginning of document
+      if (sortedRanges[0].start > 1) {
+        unprocessedRanges.push({ start: 1, end: sortedRanges[0].start - 1 });
+      }
+      
+      // Check between processed ranges
+      for (let i = 0; i < sortedRanges.length - 1; i++) {
+        if (sortedRanges[i].end + 1 < sortedRanges[i+1].start) {
+          unprocessedRanges.push({
+            start: sortedRanges[i].end + 1, 
+            end: sortedRanges[i+1].start - 1
+          });
+        }
+      }
+      
+      // Check end of document
+      if (sortedRanges[sortedRanges.length - 1].end < document.pages) {
+        unprocessedRanges.push({
+          start: sortedRanges[sortedRanges.length - 1].end + 1,
+          end: document.pages
+        });
+      }
+      
+      if (unprocessedRanges.length > 0) {
+        setPageRanges(unprocessedRanges);
+      } else {
+        // All pages processed
+        setPageRanges([]);
+        setPageRangeError("All pages have been processed");
+      }
+    }
+    
+    setShowProcessModal(true);
+  };
+  
+  const handleAddPageRange = () => {
+    setPageRanges([...pageRanges, { start: 1, end: document?.pages || 1 }]);
+  };
+  
+  const handleRemovePageRange = (index) => {
+    if (pageRanges.length > 1) {
+      const newRanges = [...pageRanges];
+      newRanges.splice(index, 1);
+      setPageRanges(newRanges);
+    }
+  };
+  
+  const handlePageRangeChange = (index, field, value) => {
+    const newValue = parseInt(value, 10);
+    if (isNaN(newValue) || newValue < 1) return;
+    
+    const newRanges = [...pageRanges];
+    newRanges[index] = { ...newRanges[index], [field]: newValue };
+    
+    // Validate that start <= end
+    if (field === 'start' && newValue > newRanges[index].end) {
+      newRanges[index].end = newValue;
+    } else if (field === 'end' && newValue < newRanges[index].start) {
+      newRanges[index].start = newValue;
+    }
+    
+    // Validate against document page count
+    if (document?.pages) {
+      if (newRanges[index].end > document.pages) {
+        newRanges[index].end = document.pages;
+      }
+    }
+    
+    setPageRanges(newRanges);
+    setPageRangeError("");
+  };
+  
+  const handleConfirmProcess = async () => {
+    try {
+      // Validate page ranges don't overlap
+      const sortedRanges = [...pageRanges].sort((a, b) => a.start - b.start);
+      for (let i = 0; i < sortedRanges.length - 1; i++) {
+        if (sortedRanges[i].end >= sortedRanges[i+1].start) {
+          setPageRangeError("Page ranges cannot overlap");
+          return;
+        }
+      }
+      
+      // Validate page ranges against existing processed ranges
+      if (document.pages_processed_range) {
+        try {
+          const existingRanges = JSON.parse(document.pages_processed_range);
+          if (Array.isArray(existingRanges)) {
+            for (const newRange of pageRanges) {
+              for (const existingRange of existingRanges) {
+                if (
+                  (newRange.start <= existingRange.end && newRange.end >= existingRange.start)
+                ) {
+                  setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRange.start}-${existingRange.end}`);
+                  return;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error validating against existing ranges:", e);
+        }
+      }
+      
+      await filesApi.processFile(document.id, { page_ranges: pageRanges });
+      toast.success(`Processing document...`);
+      setShowProcessModal(false);
+      
+      // Refresh document data
+      const updatedDoc = await filesApi.getFile(parseInt(id));
+      setDocument(updatedDoc);
+    } catch (error) {
+      console.error(`Error processing document: ${error}`);
+      toast.error('Failed to process document');
+    }
+  };
+  
+  // Helper function to format processed page ranges for display
+  const formatProcessedRanges = () => {
+    if (!document || !document.pages_processed_range) return "None";
+    
+    try {
+      const ranges = JSON.parse(document.pages_processed_range);
+      if (!Array.isArray(ranges) || ranges.length === 0) return "None";
+      
+      return ranges
+        .sort((a, b) => a.start - b.start)
+        .map(range => `${range.start}-${range.end}`)
+        .join(", ");
+    } catch (e) {
+      console.error("Error formatting processed ranges:", e);
+      return "Error parsing ranges";
+    }
   };
   
   if (loading) {
@@ -107,6 +296,14 @@ const FileDetail = () => {
           </Link>
         </div>
         <div className="header-actions">
+          <button 
+            className="btn-primary"
+            onClick={handleProcess}
+            disabled={document.status === 'processing'}
+          >
+            <i className="icon process-icon"></i>
+            Process
+          </button>
           <button className="btn-secondary">
             <i className="icon download-icon"></i>
             Download
@@ -133,14 +330,15 @@ const FileDetail = () => {
             </span>
             <span className="meta-item">
               <i className="icon calendar-icon"></i>
-              Uploaded on {document.uploadDate}
+              Uploaded on {document.uploadAt}
             </span>
             <span className="meta-item">
               <i className="icon user-icon"></i>
               by {document.uploadedBy}
             </span>
             <span className={`status-badge ${document.status}`}>
-              {document.status === 'processed' ? 'Processed' : 'Processing'}
+              {document.status === 'processed' ? 'Processed' : 
+               document.status === 'processing' ? 'Processing' : 'Pending'}
             </span>
           </div>
         </div>
@@ -188,14 +386,27 @@ const FileDetail = () => {
                   <div className="detail-value">{document.pages}</div>
                 </div>
                 <div className="detail-row">
+                  <div className="detail-label">Processed Pages</div>
+                  <div className="detail-value">{formatProcessedRanges()}</div>
+                </div>
+                <div className="detail-row">
                   <div className="detail-label">Upload date</div>
-                  <div className="detail-value">{document.uploadDate}</div>
+                  <div className="detail-value">{document.uploadAt}</div>
+                </div>
+                <div className="detail-row">
+                  <div className="detail-label">Keywords</div>
+                  <div className="detail-value">
+                    {document.keywords && document.keywords.length > 0
+                      ? document.keywords.join(", ")
+                      : "No keywords"}
+                  </div>
                 </div>
                 <div className="detail-row">
                   <div className="detail-label">Status</div>
                   <div className="detail-value">
                     <span className={`status-badge ${document.status}`}>
-                      {document.status === 'processed' ? 'Processed' : 'Processing'}
+                      {document.status === 'processed' ? 'Processed' : 
+                       document.status === 'processing' ? 'Processing' : 'Pending'}
                     </span>
                   </div>
                 </div>
@@ -377,24 +588,103 @@ const FileDetail = () => {
         )}
       </div>
       
-      {/* Delete Confirmation Modal */}
+      {/* Confirm Delete Modal */}
       {showDeleteConfirm && (
-        <div className="modal-overlay" onClick={() => setShowDeleteConfirm(false)}>
-          <div className="modal-content confirm-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-container">
+          <div className="modal">
             <div className="modal-header">
-              <h2>Confirm Deletion</h2>
-              <button className="close-btn" onClick={() => setShowDeleteConfirm(false)}>×</button>
+              <h2>Delete Document</h2>
+              <button className="close-button" onClick={() => setShowDeleteConfirm(false)}>×</button>
             </div>
             <div className="modal-body">
-              <div className="confirm-message">
-                <div className="warning-icon"></div>
-                <p>Are you sure you want to delete <strong>{document.title}</strong>?</p>
-                <p className="warning-text">This action cannot be undone. All data associated with this document will be permanently removed.</p>
-              </div>
+              <p>Are you sure you want to delete "{document.title}"?</p>
+              <p>The document will be moved to trash.</p>
             </div>
             <div className="modal-footer">
               <button className="btn-secondary" onClick={() => setShowDeleteConfirm(false)}>Cancel</button>
-              <button className="btn-danger" onClick={confirmDelete}>Delete Document</button>
+              <button className="btn-danger" onClick={confirmDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Process Page Range Modal */}
+      {showProcessModal && document && (
+        <div className="modal-container">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Process Document: {document.title}</h2>
+              <button className="close-button" onClick={() => setShowProcessModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <p>Select page ranges to process (Document has {document.pages || "unknown"} pages)</p>
+              
+              {pageRangeError && (
+                <div className="error-message">{pageRangeError}</div>
+              )}
+              
+              {pageRanges.length > 0 ? (
+                pageRanges.map((range, index) => (
+                  <div className="page-range-row" key={index}>
+                    <div className="range-inputs">
+                      <label>
+                        Start:
+                        <input 
+                          type="number" 
+                          min="1" 
+                          max={document.pages || 1}
+                          value={range.start}
+                          onChange={(e) => handlePageRangeChange(index, 'start', e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        End:
+                        <input 
+                          type="number" 
+                          min={range.start} 
+                          max={document.pages || 1}
+                          value={range.end}
+                          onChange={(e) => handlePageRangeChange(index, 'end', e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <button 
+                      className="btn-icon" 
+                      onClick={() => handleRemovePageRange(index)}
+                      disabled={pageRanges.length <= 1}
+                    >
+                      <TrashIcon className="h-5 w-5" />
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p>All pages have been processed</p>
+              )}
+              
+              <div className="modal-actions">
+                <button 
+                  className="btn-secondary" 
+                  onClick={handleAddPageRange}
+                  disabled={pageRanges.length === 0}
+                >
+                  Add Range
+                </button>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn-secondary" 
+                onClick={() => setShowProcessModal(false)}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn-primary" 
+                onClick={handleConfirmProcess}
+                disabled={pageRanges.length === 0 || pageRangeError}
+              >
+                Process
+              </button>
             </div>
           </div>
         </div>

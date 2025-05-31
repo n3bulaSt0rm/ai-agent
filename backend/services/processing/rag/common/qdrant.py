@@ -74,7 +74,7 @@ class QdrantManager:
         self,
         host: str = "localhost",
         port: int = 6333,
-        collection_name: str = "vietnamese_chunks",
+        collection_name: str = "vietnamese_chunks_test",
         vector_size: int = 768
     ):
         """Initialize Qdrant manager"""

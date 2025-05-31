@@ -4,7 +4,7 @@ import threading
 import asyncio
 import ssl
 import logging
-from typing import Dict, Any, Callable, Optional
+from typing import Dict, Any, Callable, Optional, List
 from pika.adapters.asyncio_connection import AsyncioConnection
 from backend.core.config import settings
 
@@ -140,7 +140,19 @@ class RabbitMQClient:
             def callback_wrapper(ch, method, properties, body):
                 try:
                     data = json.loads(body.decode("utf-8"))
-                    callback(data)
+                    
+                    # Check if callback is a coroutine function
+                    if asyncio.iscoroutinefunction(callback):
+                        # Create a new event loop for this thread
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        # Run the coroutine to completion
+                        loop.run_until_complete(callback(data))
+                        loop.close()
+                    else:
+                        # Normal function call
+                        callback(data)
+                        
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")

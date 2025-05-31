@@ -8,18 +8,34 @@ converts each table to a descriptive text using DeepSeek API, and saves the resu
 import os
 import re
 import sys
+import json
+import logging
+import requests
 from pathlib import Path
-from dotenv import load_dotenv
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from typing import Dict, List, Any, Tuple, Optional
+import pandas as pd
+import numpy as np
+from tabulate import tabulate
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.documents import Document
 
-# Load environment variables
-load_dotenv()
+# Get the project root directory for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.dirname(os.path.dirname(current_dir))  # src directory
+project_root = os.path.dirname(src_dir)  # project root
+sys.path.append(project_root)  # Add project root to Python path
 
-# DeepSeek API configuration
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+# Import from the central config
+from backend.core.config import settings
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+# Get DeepSeek API key from settings
+DEEPSEEK_API_KEY = settings.DEEPSEEK_API_KEY
+
 # Output directory configuration
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 

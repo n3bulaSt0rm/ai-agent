@@ -1,18 +1,35 @@
 import os
+import sys
+import json
+import logging
+from typing import Dict, Any, List, Optional
 from pathlib import Path
-from dotenv import load_dotenv
-from azure.ai.documentintelligence import DocumentIntelligenceClient
+
 from azure.core.credentials import AzureKeyCredential
-from azure.core.exceptions import HttpResponseError
+from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest, ParagraphRole
 
-# Load environment variables
-load_dotenv()
+# Get the project root directory for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.dirname(os.path.dirname(current_dir))  # src directory
+project_root = os.path.dirname(src_dir)  # project root
+sys.path.append(project_root)  # Add project root to Python path
 
-# Azure Document Intelligence configuration
-AZURE_DOCUMENT_ENDPOINT = os.getenv("AZURE_DOCUMENT_ENDPOINT")
-AZURE_DOCUMENT_KEY = os.getenv("AZURE_DOCUMENT_KEY")
+# Import from the central config
+from backend.core.config import settings
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+# Get Azure Document API credentials from settings
+AZURE_DOCUMENT_ENDPOINT = settings.AZURE_DOCUMENT_ENDPOINT
+AZURE_DOCUMENT_KEY = settings.AZURE_DOCUMENT_KEY
 AZURE_MODEL_ID = "prebuilt-layout"  # Model for extracting text and tables
+
+# Check for required environment variables
+if not AZURE_DOCUMENT_ENDPOINT or not AZURE_DOCUMENT_KEY:
+    logger.error("Azure Document Intelligence API credentials not set")
+    raise ValueError("Azure Document Intelligence API credentials not set. Set AZURE_DOCUMENT_ENDPOINT and AZURE_DOCUMENT_KEY in .env file")
 
 # Output directory configuration
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"

@@ -5,6 +5,7 @@ import hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from backend.core.config import settings
+from uuid import uuid4
 
 class MetadataDB:
     """Database class for handling file metadata"""
@@ -24,20 +25,22 @@ class MetadataDB:
             self.conn.execute('''
             CREATE TABLE IF NOT EXISTS files_management (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL,
                 filename TEXT NOT NULL,
-                original_filename TEXT NOT NULL,
                 file_size INTEGER NOT NULL,
-                file_type TEXT NOT NULL,
-                s3_url TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                object_url TEXT,
+                s3_uri TEXT NOT NULL,
                 upload_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 previous_status TEXT,
                 pages INTEGER DEFAULT 0,
+                keywords TEXT,
+                pages_processed_range TEXT,
                 description TEXT,
                 file_created_at TEXT,
                 updated_at TEXT,
-                uploaded_by TEXT DEFAULT 'admin',
-                metadata TEXT
+                uploaded_by TEXT DEFAULT 'admin'
             )
             ''')
             
@@ -115,42 +118,48 @@ class MetadataDB:
             print(f"Error verifying user: {e}")
             return False, None
     
-    def add_pdf_file(self, filename: str, original_filename: str, file_size: int, 
-                     file_type: str, s3_url: str, description: str = None, 
-                     file_created_at: str = None, metadata: Dict[str, Any] = None) -> int:
+    def add_pdf_file(self, filename: str, file_size: int, 
+                     content_type: str, s3_uri: str, object_url: str = None, description: str = None, 
+                     file_created_at: str = None, pages: int = 0, uuid: str = None, keywords: str = None) -> int:
         """
         Add a new file to the database.
         
         Args:
-            filename: Stored filename
-            original_filename: Original filename
+            filename: Original filename
             file_size: Size in bytes
-            file_type: File type (e.g., 'application/pdf')
-            s3_url: Amazon S3 URL
+            content_type: File content type (e.g., 'application/pdf')
+            s3_uri: Amazon S3 URI
+            object_url: Public URL for the file
             description: File description
             file_created_at: When the file was created (if known)
-            metadata: Additional metadata as dictionary
+            pages: Number of pages in the document
+            uuid: Unique identifier for the file
+            keywords: JSON string containing keywords
             
         Returns:
             ID of the new file record
         """
         now = datetime.now().isoformat()
         
+        # Generate UUID if not provided
+        if not uuid:
+            uuid = str(uuid4())
+            
         with self.conn:
             cursor = self.conn.execute(
                 '''INSERT INTO files_management 
-                   (filename, original_filename, file_size, file_type, s3_url, 
-                    upload_at, description, file_created_at, updated_at, metadata, status) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (filename, original_filename, file_size, file_type, s3_url, 
-                 now, description, file_created_at or now, now, json.dumps(metadata or {}), 'pending')
+                   (uuid, filename, file_size, content_type, s3_uri, object_url,
+                    upload_at, description, file_created_at, updated_at, pages, status, keywords) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (uuid, filename, file_size, content_type, s3_uri, object_url,
+                 now, description, file_created_at or now, now, pages, 'pending', keywords)
             )
             file_id = cursor.lastrowid
             
             return file_id
     
     def get_pdf_files(self, limit: int = 100, offset: int = 0, 
-                      status: Optional[str] = None) -> List[Dict[str, Any]]:
+                      status: Optional[str] = None, exclude_status: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get a list of files with pagination and optional filtering.
         
@@ -158,6 +167,7 @@ class MetadataDB:
             limit: Maximum number of files to return
             offset: Offset for pagination
             status: Filter by status (pending, processing, processed, error, deleted)
+            exclude_status: Exclude files with this status
             
         Returns:
             List of file records
@@ -168,9 +178,9 @@ class MetadataDB:
         if status:
             query += ' WHERE status = ?'
             params.append(status)
-        elif status is None:
-            # Exclude deleted files by default
-            query += ' WHERE status != "deleted"'
+        elif exclude_status:
+            query += ' WHERE status != ?'
+            params.append(exclude_status)
         
         query += ' ORDER BY upload_at DESC LIMIT ? OFFSET ?'
         params.extend([limit, offset])
@@ -180,18 +190,17 @@ class MetadataDB:
         files = []
         for row in cursor:
             file_data = dict(row)
-            if file_data.get('metadata'):
-                file_data['metadata'] = json.loads(file_data['metadata'])
             files.append(file_data)
             
         return files
     
-    def get_pdf_file_count(self, status: Optional[str] = None) -> int:
+    def get_pdf_file_count(self, status: Optional[str] = None, exclude_status: Optional[str] = None) -> int:
         """
         Get count of files, optionally filtered by status.
         
         Args:
             status: Filter by status
+            exclude_status: Exclude files with this status
             
         Returns:
             Count of files
@@ -202,9 +211,9 @@ class MetadataDB:
         if status:
             query += ' WHERE status = ?'
             params.append(status)
-        elif status is None:
-            # Exclude deleted files by default
-            query += ' WHERE status != "deleted"'
+        elif exclude_status:
+            query += ' WHERE status != ?'
+            params.append(exclude_status)
         
         cursor = self.conn.execute(query, params)
         return cursor.fetchone()[0]
@@ -226,13 +235,10 @@ class MetadataDB:
             return None
             
         file_data = dict(row)
-        if file_data.get('metadata'):
-            file_data['metadata'] = json.loads(file_data['metadata'])
-            
         return file_data
     
     def update_pdf_status(self, file_id: int, status: str, error: str = None, 
-                         pages: int = None, previous_status: str = None) -> bool:
+                         pages: int = None, previous_status: str = None, pages_processed_range: str = None) -> bool:
         """
         Update the status of a file.
         
@@ -242,6 +248,7 @@ class MetadataDB:
             error: Error message if any
             pages: Number of pages in the document
             previous_status: Previous status before change (for restore operations)
+            pages_processed_range: Range of pages processed in JSON format
             
         Returns:
             True if successful, False otherwise
@@ -262,18 +269,13 @@ class MetadataDB:
             query_parts.append("previous_status = ?")
             params.append(previous_status)
         
-        if error is not None:
-            # Store error in metadata
-            file = self.get_pdf_file(file_id)
-            if file:
-                metadata = file.get('metadata', {})
-                metadata['error'] = error
-                query_parts.append("metadata = ?")
-                params.append(json.dumps(metadata))
-        
         if pages is not None:
             query_parts.append("pages = ?")
             params.append(pages)
+            
+        if pages_processed_range is not None:
+            query_parts.append("pages_processed_range = ?")
+            params.append(pages_processed_range)
         
         # Complete the query
         query = f"UPDATE files_management SET {', '.join(query_parts)} WHERE id = ?"
@@ -290,7 +292,7 @@ class MetadataDB:
             
     def search_pdf_files(self, query: str, limit: int = 10, offset: int = 0, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Search for files by filename, description or content.
+        Search for files by filename or description.
         
         Args:
             query: Search query
@@ -309,7 +311,7 @@ class MetadataDB:
         # Construct SQL query based on status
         sql_query = '''
         SELECT * FROM files_management
-        WHERE (original_filename LIKE ? OR description LIKE ?)
+        WHERE (filename LIKE ? OR description LIKE ?)
         '''
         
         # Add status filtering
@@ -335,15 +337,13 @@ class MetadataDB:
         files = []
         for row in cursor:
             file_data = dict(row)
-            if file_data.get('metadata'):
-                file_data['metadata'] = json.loads(file_data['metadata'])
             files.append(file_data)
             
         return files
     
     def get_pdf_file_by_uuid(self, file_uuid: str) -> Optional[Dict[str, Any]]:
         """
-        Get a specific file by UUID from metadata.
+        Get a specific file by UUID.
         
         Args:
             file_uuid: UUID of the file
@@ -352,8 +352,8 @@ class MetadataDB:
             File record or None if not found
         """
         cursor = self.conn.execute(
-            'SELECT * FROM files_management WHERE metadata LIKE ?', 
-            (f'%"uuid": "{file_uuid}"%',)
+            'SELECT * FROM files_management WHERE uuid = ?', 
+            (file_uuid,)
         )
         row = cursor.fetchone()
         
@@ -361,37 +361,41 @@ class MetadataDB:
             return None
         
         file_data = dict(row)
-        if file_data.get('metadata'):
-            file_data['metadata'] = json.loads(file_data['metadata'])
-        
         return file_data
     
-    def update_pdf_status_by_uuid(self, file_uuid: str, status: str) -> bool:
+    def update_pdf_status_by_uuid(self, file_uuid: str, status: str, pages: int = None, pages_processed_range: str = None) -> bool:
         """
         Update the status of a file by UUID.
         
         Args:
             file_uuid: UUID of the file
             status: New status (pending, processing, processed, error, deleted)
+            pages: Number of pages if available
+            pages_processed_range: Range of pages processed in JSON format
             
         Returns:
             True if successful, False otherwise
         """
-        # First get the file by UUID to get its ID
-        file = self.get_pdf_file_by_uuid(file_uuid)
-        if not file:
-            return False
-        
-        file_id = file['id']
         now = datetime.now().isoformat()
         
         try:
             with self.conn:
-                # Update file status and updated_at timestamp
-                self.conn.execute(
-                    "UPDATE files_management SET status = ?, updated_at = ? WHERE id = ?",
-                    (status, now, file_id)
-                )
+                query = "UPDATE files_management SET status = ?, updated_at = ?"
+                params = [status, now]
+                
+                if pages is not None:
+                    query += ", pages = ?"
+                    params.append(pages)
+                
+                if pages_processed_range is not None:
+                    query += ", pages_processed_range = ?"
+                    params.append(pages_processed_range)
+                    
+                query += " WHERE uuid = ?"
+                params.append(file_uuid)
+                
+                # Update file status
+                self.conn.execute(query, params)
             return True
         except Exception as e:
             print(f"Error updating file status by UUID: {e}")

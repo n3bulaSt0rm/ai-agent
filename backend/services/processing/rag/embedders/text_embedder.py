@@ -25,7 +25,7 @@ class VietnameseEmbeddingModule:
         self,
         qdrant_host: str = "localhost",
         qdrant_port: int = 6333,
-        collection_name: str = "vietnamese_chunks",
+        collection_name: str = "vietnamese_chunks_test",
         model_name: str = "bkai-foundation-models/vietnamese-bi-encoder",
         vector_size: int = 768,
         cuda_device: int = 0
@@ -285,7 +285,7 @@ if __name__ == "__main__":
         
         # Load and embed chunks with keywords
         data_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
-                               "data/final_chunks_12f371bf-3fd8-4205-b06e-8346c8f40ad2.json")
+                               "data/final_chunks_9d631398-eae9-4493-8a48-575cb2b92ab0.json")
         
         if os.path.exists(data_file):
             # Define program-specific keywords

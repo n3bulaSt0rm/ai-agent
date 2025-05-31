@@ -2,6 +2,6 @@
 Gemini Model Package
 """
 
-from src.models.gemini.main import GeminiModel
+from backend.services.processing.rag.models.gemini.main import GeminiModel
 
 __all__ = ["GeminiModel"] 

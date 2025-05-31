@@ -21,38 +21,34 @@ from email.mime.multipart import MIMEMultipart
 import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # Qdrant for vector search
 from backend.db.vector_store import get_vector_store_async
+# Import Vietnamese Query Module
+from backend.services.processing.rag.retrievers.qdrant_retriever import VietnameseQueryModule, create_query_module
+from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.core.config import settings
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
-# Define scope for Gmail API
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 
-          'https://www.googleapis.com/auth/gmail.compose']
 
 class GmailHandler:
     """
     Handler for monitoring Gmail inbox, processing emails, and generating responses.
     """
     
-    def __init__(self, credentials_path: str = None, 
-                 token_path: str = None, poll_interval: int = None):
+    def __init__(self, token_path: str = None, poll_interval: int = None):
         """
         Initialize Gmail handler with authentication.
         
         Args:
-            credentials_path: Path to the credentials JSON file
             token_path: Path to the token JSON file
             poll_interval: Interval in seconds between inbox checks
         """
-        self.credentials_path = credentials_path or settings.GMAIL_CREDENTIALS_PATH
-        self.token_path = token_path or settings.GMAIL_TOKEN_PATH
+        # Use the provided token.json path directly
+        self.token_path = token_path or "/home/n3bulast0rm/Documents/Projects/DATN/ai-agent/secret/token.json"
         self.service = None
         self.user_id = 'me'  # 'me' refers to the authenticated user
         
@@ -64,57 +60,73 @@ class GmailHandler:
         self.deepseek_api_url = settings.DEEPSEEK_API_URL
         self.deepseek_model = settings.DEEPSEEK_MODEL
         
+        # Initialize Vietnamese Query Module
+        self.query_module = None
+        
         if not self.deepseek_api_key:
             logger.warning("DEEPSEEK_API_KEY not set in settings")
+    
+    def _init_query_module(self):
+        """
+        Initialize the Vietnamese Query Module if not already initialized
+        """
+        if self.query_module is not None:
+            return
             
+        try:
+            # Create embedding module
+            embedding_module = VietnameseEmbeddingModule(
+                qdrant_host="localhost",
+                qdrant_port=6333,
+                collection_name="vietnamese_chunks_test",  # Use the correct collection name
+                model_name="bkai-foundation-models/vietnamese-bi-encoder"
+            )
+            
+            # Create query module
+            self.query_module = create_query_module(
+                embedding_module=embedding_module,
+                deepseek_api_key=self.deepseek_api_key,
+                deepseek_model=self.deepseek_model
+            )
+            
+            logger.info("Vietnamese Query Module initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Error initializing Vietnamese Query Module: {e}")
+            raise
+
     def authenticate(self) -> None:
         """
-        Authenticate with Gmail API.
+        Authenticate with Gmail API using the existing token file.
         
         Raises:
-            FileNotFoundError: If credentials file doesn't exist
+            FileNotFoundError: If token file doesn't exist
             Exception: If authentication fails
         """
         creds = None
         
-        # Check if token file exists
+        # Check if token file exists and load it directly
         if os.path.exists(self.token_path):
             try:
-                creds = Credentials.from_authorized_user_info(
-                    json.load(open(self.token_path)), SCOPES)
-            except Exception as e:
-                logger.error(f"Error loading token file: {e}")
-                creds = None
+                # Load token data
+                token_data = json.load(open(self.token_path))
                 
-        # If credentials don't exist or are invalid, get new ones
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                try:
+                # Create credentials using the token data
+                creds = Credentials.from_authorized_user_info(token_data)
+                
+                # If token is expired but has refresh token, refresh it
+                if creds.expired and creds.refresh_token:
                     creds.refresh(Request())
-                except Exception as e:
-                    logger.error(f"Error refreshing token: {e}")
-                    creds = None
-            
-            # If still no valid creds, need to do OAuth flow
-            if not creds:
-                if not os.path.exists(self.credentials_path):
-                    raise FileNotFoundError(f"Credentials file not found: {self.credentials_path}")
-                    
-                try:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        self.credentials_path, SCOPES)
-                    creds = flow.run_local_server(port=0)
-                except Exception as e:
-                    logger.error(f"Error in OAuth flow: {e}")
-                    raise
-                
-            # Save credentials for next time
-            try:
-                with open(self.token_path, 'w') as token:
-                    token.write(creds.to_json())
-                logger.info(f"Saved authentication token to {self.token_path}")
+                    # Save the refreshed token
+                    with open(self.token_path, 'w') as token:
+                        token.write(creds.to_json())
+                    logger.info(f"Refreshed and saved authentication token to {self.token_path}")
             except Exception as e:
-                logger.error(f"Error saving token: {e}")
+                logger.error(f"Error loading or refreshing token file: {e}")
+                raise
+        else:
+            logger.error(f"Token file not found at {self.token_path}")
+            raise FileNotFoundError(f"Token file not found: {self.token_path}")
                 
         # Build Gmail service
         try:
@@ -237,39 +249,6 @@ class GmailHandler:
             logger.error(f"Error marking message as read: {e}")
             raise
             
-    async def query_qdrant(self, query_text: str) -> List[Dict[str, Any]]:
-        """
-        Query Qdrant vector database for relevant documents.
-        
-        Args:
-            query_text: Query text from email
-            
-        Returns:
-            List of relevant documents
-            
-        Raises:
-            Exception: If querying Qdrant fails
-        """
-        try:
-            # Get vector store
-            vector_store = await get_vector_store_async()
-            
-            # Search in vector store
-            search_params = {
-                "query_text": query_text,
-                "limit": 5,  # Retrieve top 5 results
-            }
-            
-            # Add filter for non-deleted documents if the vector store supports it
-            if hasattr(vector_store, 'search') and 'filters' in vector_store.search.__code__.co_varnames:
-                search_params["filters"] = {"is_deleted": False}
-                
-            results = await vector_store.search(**search_params)
-            
-            return results
-        except Exception as e:
-            logger.error(f"Error querying Qdrant: {e}")
-            return []
             
     async def call_deepseek_api(self, user_query: str, context: List[Dict[str, Any]]) -> str:
         """
@@ -332,7 +311,7 @@ Please draft a professional email response that addresses the user's query using
                             {"role": "user", "content": prompt}
                         ],
                         "temperature": 0.7,
-                        "max_tokens": 1000
+                        "max_tokens": 4000
                     },
                     timeout=30.0
                 )
@@ -387,12 +366,74 @@ Please draft a professional email response that addresses the user's query using
             logger.error(f"Error creating draft: {e}")
             raise
             
+    async def process_email_with_vietnamese_query_module(self, email_body: str) -> str:
+        """
+        Process email using the Vietnamese Query Module from qdrant_retriever.py
+        
+        Args:
+            email_body: Raw email body text
+            
+        Returns:
+            Generated email response based on extracted queries
+        """
+        try:
+            # Initialize query module if needed
+            if self.query_module is None:
+                self._init_query_module()
+            
+            # Process email using the Vietnamese Query Module - giống như trong main của qdrant_retriever.py
+            logger.info(f"Processing email with Vietnamese Query Module")
+            results = self.query_module.process_email(email_body)
+            
+            if not results:
+                logger.warning("No results from Vietnamese Query Module")
+                return "Không tìm thấy thông tin liên quan đến câu hỏi của bạn."
+            
+            # Format kết quả để hiển thị cho người dùng
+            prompt = f"""Bạn là một trợ lý AI chuyên trả lời email. 
+Hãy soạn một email phản hồi dựa trên các câu hỏi và thông tin có sẵn dưới đây.
+
+Nội dung email chứa các câu hỏi sau:
+"""
+            
+            # Tạo context từ kết quả của process_email
+            for i, result in enumerate(results):
+                prompt += f"\nCâu hỏi {i+1}: {result.original_query}\n"
+                
+                if result.results:
+                    prompt += "Thông tin tìm thấy:\n"
+                    for j, text in enumerate(result.results):
+                        prompt += f"--- Tài liệu {j+1} ---\n{text}\n\n"
+                else:
+                    prompt += "Không tìm thấy thông tin liên quan.\n"
+            
+            # Thêm hướng dẫn cho DeepSeek
+            prompt += """
+Hãy soạn một email phản hồi chuyên nghiệp để trả lời tất cả các câu hỏi trên, sử dụng thông tin đã cung cấp.
+Email nên rõ ràng, súc tích, được định dạng phù hợp và viết bằng tiếng Việt.
+"""
+            
+            # Gọi DeepSeek API
+            response_text = await self.call_deepseek_api("Soạn email phản hồi", [
+                {
+                    "content": prompt,
+                    "metadata": {
+                        "type": "email_queries"
+                    }
+                }
+            ])
+            return response_text
+            
+        except Exception as e:
+            logger.error(f"Error processing email with Vietnamese Query Module: {e}")
+            return f"Có lỗi xảy ra khi xử lý email: {str(e)}"
+
     async def process_email(self, email: Dict[str, Any]) -> None:
         """
         Process a single email:
         1. Extract query from email body
-        2. Query Qdrant for relevant documents
-        3. Call DeepSeek API to generate response
+        2. Process using Vietnamese Query Module
+        3. Call DeepSeek API to generate response if needed
         4. Create draft email response
         5. Mark original email as read
         
@@ -412,14 +453,8 @@ Please draft a professional email response that addresses the user's query using
                 
             logger.info(f"Processing query: {query[:100]}...")
             
-            # Query Qdrant
-            qdrant_results = await self.query_qdrant(query)
-            
-            if not qdrant_results:
-                logger.warning("No relevant documents found in Qdrant")
-                
-            # Call DeepSeek API
-            response_text = await self.call_deepseek_api(query, qdrant_results)
+            # Process email using Vietnamese Query Module
+            response_text = await self.process_email_with_vietnamese_query_module(query)
             
             # Create draft email
             self.create_draft_email(

@@ -5,29 +5,42 @@ import torch
 import numpy as np
 import os
 from collections import defaultdict
-from dotenv import load_dotenv
 import json
-
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-dotenv_path = os.path.join(project_root, ".env")
-load_dotenv(dotenv_path)
-
-# Import common modules
 import sys
+
+# Add the project root to the Python path
+# Get absolute path to project root
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # src directory
-project_root = os.path.dirname(src_dir)  # project root
-sys.path.append(project_root)  # Add project root to Python path
-from src.common.cuda import CudaMemoryManager
-from src.common.qdrant import ChunkData, QueryResult as QdrantQueryResult, QdrantManager
-from src.models.deepseek.main import DeepSeekModel
-from src.embedders.text_embedder import VietnameseEmbeddingModule
+src_dir = os.path.dirname(current_dir)  # rag directory
+processing_dir = os.path.dirname(src_dir)  # processing directory
+services_dir = os.path.dirname(processing_dir)  # services directory
+backend_dir = os.path.dirname(services_dir)  # backend directory
+project_root = os.path.dirname(backend_dir)  # project root
+
+# Ensure the project root is in sys.path
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Import from the central config
+from backend.core.config import settings
+
+# Import common modules using absolute imports
+from backend.services.processing.rag.common.cuda import CudaMemoryManager
+from backend.services.processing.rag.common.qdrant import ChunkData, QueryResult as QdrantQueryResult, QdrantManager
+from backend.services.processing.rag.models.deepseek.main import DeepSeekModel
+from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
 
+# Get DeepSeek API key from settings
+deepseek_api_key = settings.DEEPSEEK_API_KEY
+if deepseek_api_key:
+    masked_key = f"{deepseek_api_key[:5]}...{deepseek_api_key[-5:]}" if len(deepseek_api_key) > 10 else "***"
+    logger.info(f"DeepSeek API key loaded from settings: {masked_key}")
+else:
+    logger.error("DeepSeek API key is missing in settings")
 
 @dataclass
 class QueryWithKeywords:
@@ -95,6 +108,10 @@ class VietnameseQueryModule:
         # Setup deepseek model - required
         if not deepseek_api_key:
             raise ValueError("DeepSeek API key is required for query extraction")
+            
+        # Log masked API key for debugging
+        masked_key = f"{deepseek_api_key[:5]}...{deepseek_api_key[-5:]}" if len(deepseek_api_key) > 10 else "***"
+        logger.info(f"Using DeepSeek API key: {masked_key} for model: {deepseek_model}")
         
         self.deepseek = DeepSeekModel(api_key=deepseek_api_key, model_name=deepseek_model)
         logger.info(f"Initialized DeepSeek model: {deepseek_model}")
@@ -146,6 +163,16 @@ JSON:"""
             # Use DeepSeek to generate queries and keywords
             response_text = self.deepseek.generate_answer("", prompt)
             
+            # Add debug logging for the raw response
+            logger.info(f"DeepSeek raw response length: {len(response_text) if response_text else 0}")
+            if not response_text or not response_text.strip():
+                logger.error("Empty response from DeepSeek API")
+                raise ValueError("Empty response from DeepSeek API")
+            
+            # Log first 100 characters of response for debugging
+            preview = response_text[:100] + "..." if len(response_text) > 100 else response_text
+            logger.debug(f"Response preview: {preview}")
+            
             # Parse JSON response
             try:
                 # Clean response text (remove any extra text before/after JSON)
@@ -156,11 +183,42 @@ JSON:"""
                     response_text = response_text[:-3]
                 response_text = response_text.strip()
                 
-                parsed_response = json.loads(response_text)
+                # Additional check for empty response after cleaning
+                if not response_text:
+                    logger.error("Empty JSON content after cleaning response")
+                    raise ValueError("Empty JSON content from DeepSeek")
+                
+                try:
+                    parsed_response = json.loads(response_text)
+                except json.JSONDecodeError as je:
+                    # Try to extract JSON using regex as a fallback
+                    logger.warning(f"JSON decode error: {je}. Attempting to extract JSON with regex...")
+                    import re
+                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                    if json_match:
+                        try:
+                            parsed_response = json.loads(json_match.group(0))
+                            logger.info("Successfully extracted JSON using regex")
+                        except:
+                            logger.error(f"Failed to parse JSON after regex extraction")
+                            raise ValueError(f"Invalid JSON response from DeepSeek after fallback extraction")
+                    else:
+                        # If no JSON-like structure found, fallback to a simple format
+                        logger.error("No JSON structure found in response. Creating fallback format.")
+                        # Create a simple query from the email content
+                        query = email_content.strip().split('\n')[0][:100]  # First line, truncated
+                        keywords = query.split()[:5]  # First 5 words as keywords
+                        
+                        return [QueryWithKeywords(query=query, keywords=keywords)]
+                
                 queries_data = parsed_response.get("queries", [])
                 
                 if not queries_data:
-                    raise ValueError("No queries found in DeepSeek response")
+                    logger.warning("No queries found in DeepSeek response, using fallback")
+                    # Create a fallback query
+                    query = email_content.strip().split('\n')[0][:100]  # First line, truncated
+                    keywords = query.split()[:5]  # First 5 words as keywords
+                    return [QueryWithKeywords(query=query, keywords=keywords)]
                 
                 # Convert to QueryWithKeywords objects
                 extracted_queries = []
@@ -172,7 +230,11 @@ JSON:"""
                         extracted_queries.append(QueryWithKeywords(query=query, keywords=keywords))
                 
                 if not extracted_queries:
-                    raise ValueError("No valid queries with keywords extracted")
+                    logger.warning("No valid queries with keywords extracted, using fallback")
+                    # Create a fallback query
+                    query = email_content.strip().split('\n')[0][:100]  # First line, truncated
+                    keywords = query.split()[:5]  # First 5 words as keywords
+                    return [QueryWithKeywords(query=query, keywords=keywords)]
                 
                 logger.info(f"Extracted {len(extracted_queries)} queries from email")
                 for i, q in enumerate(extracted_queries):
@@ -299,8 +361,30 @@ JSON:"""
                 if chunk_keywords:
                     metadata_matches = 0
                     for keyword in keywords:
-                        if keyword.lower() in [k.lower() for k in chunk_keywords]:
-                            metadata_matches += 1
+                        keyword_lower = keyword.lower()
+                        # Handle different types of chunk_keywords
+                        for k in chunk_keywords:
+                            if isinstance(k, str):
+                                # If k is a string, compare directly
+                                if keyword_lower in k.lower():
+                                    metadata_matches += 1
+                                    break
+                            elif isinstance(k, list):
+                                # If k is a list, check all items in the list
+                                for item in k:
+                                    if isinstance(item, str) and keyword_lower in item.lower():
+                                        metadata_matches += 1
+                                        break
+                            else:
+                                # For other types, convert to string and compare
+                                try:
+                                    k_str = str(k).lower()
+                                    if keyword_lower in k_str:
+                                        metadata_matches += 1
+                                        break
+                                except:
+                                    # Skip items that can't be converted to string
+                                    pass
                     
                     if metadata_matches > 0:
                         boost_factor *= (self.config.metadata_keyword_boost ** metadata_matches)
@@ -647,7 +731,7 @@ if __name__ == "__main__":
         embedding_module = VietnameseEmbeddingModule(
             qdrant_host="localhost",
             qdrant_port=6333,
-            collection_name="vietnamese_chunks",
+            collection_name="vietnamese_chunks_test",
             model_name="bkai-foundation-models/vietnamese-bi-encoder"
         )
         

@@ -4,9 +4,6 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    libtesseract-dev \
-    tesseract-ocr-vie \
     gcc \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

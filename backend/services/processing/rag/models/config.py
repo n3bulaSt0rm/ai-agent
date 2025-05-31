@@ -1,58 +1,52 @@
 """
-Shared Configuration for All LLM Models
+Configuration for LLM models in the RAG pipeline.
 """
 
-# OpenAI model configuration
-OPENAI_CONFIG = {
-    "api_key": "",
-    "model_name": "gpt-3.5-turbo",
-    "temperature": 0.7,
-    "max_tokens": 1024
-}
+import os
+from typing import Dict, Any, Optional
+from backend.core.config import settings
 
-# DeepSeek model configuration
-DEEPSEEK_CONFIG = {
-    "api_key": "",
-    "model_name": "deepseek-chat",
-    "temperature": 0.7,
-    "max_tokens": 1024
-}
-
-# Gemini model configuration
-GEMINI_CONFIG = {
-    "api_key": "",
-    "model_name": "gemini-pro",
-    "temperature": 0.7,
-    "max_tokens": 1024
-}
-
-# Default configuration by model type
-DEFAULT_CONFIGS = {
-    "openai": OPENAI_CONFIG,
-    "deepseek": DEEPSEEK_CONFIG,
-    "gemini": GEMINI_CONFIG
-}
-
-def get_model_config(model_type, custom_config=None):
+def get_model_config(model_type: str, custom_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    Get configuration for the specified model type.
+    Get the configuration for a specific model type.
     
     Args:
-        model_type (str): Type of model ("openai", "deepseek", "gemini")
-        custom_config (dict, optional): Custom configuration to merge with defaults
+        model_type (str): Type of model (openai, deepseek, gemini)
+        custom_config (dict, optional): Custom configuration to override defaults
         
     Returns:
-        dict: Configuration for the model
+        dict: Model configuration
     """
-    model_type = model_type.lower()
+    # Default configurations
+    default_configs = {
+        "openai": {
+            "api_key": settings.OPENAI_API_KEY if hasattr(settings, "OPENAI_API_KEY") else "",
+            "model_name": "gpt-3.5-turbo",
+            "temperature": 0.7,
+            "max_tokens": 1024
+        },
+        "deepseek": {
+            "api_key": settings.DEEPSEEK_API_KEY,
+            "model_name": settings.DEEPSEEK_MODEL,
+            "temperature": 0.7,
+            "max_tokens": 1024
+        },
+        "gemini": {
+            "api_key": settings.GEMINI_API_KEY if hasattr(settings, "GEMINI_API_KEY") else "",
+            "model_name": "gemini-pro",
+            "temperature": 0.7,
+            "max_tokens": 1024
+        }
+    }
     
-    if model_type not in DEFAULT_CONFIGS:
+    # Get default config for the model type
+    if model_type not in default_configs:
         raise ValueError(f"Unsupported model type: {model_type}")
+        
+    config = default_configs[model_type].copy()
     
-    if custom_config is None:
-        return DEFAULT_CONFIGS[model_type].copy()
-    
-    # Merge with defaults
-    config = DEFAULT_CONFIGS[model_type].copy()
-    config.update(custom_config)
+    # Override with custom config if provided
+    if custom_config:
+        config.update(custom_config)
+        
     return config 

@@ -28,13 +28,12 @@ Hệ thống tuân theo mô hình kiến trúc sạch với sự phân tách rõ
 
 ### Yêu cầu
 
-- Python 3.11 trở lên
-- Node.js 16+ và npm
+- Python 3.11 hoặc cao hơn
+- Node.js 16 hoặc cao hơn
 - Docker và Docker Compose (tùy chọn)
-- Tài khoản AWS với S3 đã cấu hình (tùy chọn)
-- Tesseract OCR đã cài đặt (cho việc trích xuất văn bản)
-- Tài khoản Gmail và OAuth credentials (cho dịch vụ email)
-- Tài khoản DeepSeek và API key (cho dịch vụ trả lời email)
+- Amazon AWS S3 bucket
+- Tài khoản Gmail với OAuth2 credentials
+- DeepSeek API key
 
 ### Thiết lập môi trường phát triển
 
@@ -54,9 +53,9 @@ Hệ thống tuân theo mô hình kiến trúc sạch với sự phân tách rõ
    # - DATABASE_PATH: đường dẫn đến file SQLite
    # - AWS_ACCESS_KEY_ID và AWS_SECRET_ACCESS_KEY: thông tin xác thực AWS
    # - S3_BUCKET_NAME: tên bucket Amazon S3
-   # - TESSERACT_CMD: đường dẫn đến Tesseract OCR (nếu cần)
    # - GMAIL_CREDENTIALS_PATH: đường dẫn đến file OAuth credentials
    # - DEEPSEEK_API_KEY: API key của DeepSeek
+   # - AZURE_DOCUMENT_ENDPOINT và AZURE_DOCUMENT_KEY: API Azure Document Intelligence
    ```
 4. Cài đặt phụ thuộc cho frontend:
    ```
@@ -114,26 +113,6 @@ docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_data:/qdrant/storage qdran
 ### Hoặc tải và cài đặt trực tiếp từ trang chủ:
 https://qdrant.tech/documentation/install/
 
-## Cài đặt Tesseract OCR
-
-### Windows:
-1. Tải Tesseract từ: https://github.com/UB-Mannheim/tesseract/wiki
-2. Cài đặt và thêm đường dẫn vào biến môi trường PATH
-3. Cập nhật `TESSERACT_CMD` trong file .env
-
-### Linux:
-```
-sudo apt update
-sudo apt install tesseract-ocr
-sudo apt install tesseract-ocr-vie  # Cho tiếng Việt
-```
-
-### macOS:
-```
-brew install tesseract
-brew install tesseract-lang  # Cho các ngôn ngữ bổ sung
-```
-
 ## Sử dụng API
 
 Sau khi khởi động web service, bạn có thể:
@@ -185,16 +164,6 @@ Nên thay đổi trong file .env cho môi trường sản xuất.
 - Kiểm tra xem Qdrant có đang chạy không
 - Xác minh QDRANT_HOST và QDRANT_PORT trong .env
 - Thử kết nối trực tiếp: `curl http://localhost:6333/collections`
-
-### Lỗi OCR:
-- Kiểm tra Tesseract đã cài đặt đúng cách
-- Xác minh TESSERACT_CMD trong .env (đặc biệt quan trọng trên Windows)
-- Kiểm tra ngôn ngữ đã cài đặt: `tesseract --list-langs`
-
-### Lỗi xác thực AWS:
-- Kiểm tra AWS_ACCESS_KEY_ID và AWS_SECRET_ACCESS_KEY trong .env
-- Xác minh quyền đã đủ cho S3
-- Thử xác thực thủ công với AWS CLI 
 
 ### Lỗi Gmail API:
 - Kiểm tra file credentials.json đã tồn tại và đúng cấu trúc

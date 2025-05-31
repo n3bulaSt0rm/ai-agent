@@ -24,8 +24,8 @@ wheels/
 *.egg
 
 # Virtual environment
-.venv_azure
-.venv/
+.venv.*
+.venv_azure/
 env/
 venv/
 ENV/
@@ -59,3 +59,6 @@ htmlcov/
 
 # Data files
 data/ 
+qdrant_data
+secret
+token.json

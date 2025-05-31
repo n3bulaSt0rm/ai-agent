@@ -38,7 +38,7 @@ _executor = ThreadPoolExecutor(max_workers=10)
 
 async def upload_to_s3(content: bytes, path: str) -> str:
     """
-    Upload content to S3 bucket using a direct approach that bypasses time skew issues.
+    Upload content to S3 bucket using presigned URL approach.
     
     Args:
         content: File content as bytes
@@ -50,110 +50,104 @@ async def upload_to_s3(content: bytes, path: str) -> str:
     bucket_name = settings.S3_BUCKET_NAME
     
     try:
-        # Instead of using put_object which is sensitive to time skew,
-        # we'll manually create a request with direct upload
-        def _upload():
-            # Calculate content MD5
-            content_md5 = base64.b64encode(hashlib.md5(content).digest()).decode('utf-8')
+        logger.info(f"Uploading to S3 using presigned URL approach: {path}")
+        
+        # Get a pre-signed URL for PUT request
+        def _get_presigned_url():
+            presigned_url = s3_client.generate_presigned_url(
+                'put_object',
+                Params={'Bucket': bucket_name, 'Key': path, 'ContentType': 'application/pdf'},
+                ExpiresIn=3600
+            )
+            return presigned_url
             
-            # Create basic headers
-            headers = {
-                'Content-Type': 'application/pdf',
-                'Content-Length': str(len(content)),
-                'Content-MD5': content_md5,
-            }
-            
-            # Create the endpoint URL
-            endpoint_url = f"https://{bucket_name}.s3.{settings.AWS_REGION}.amazonaws.com/{path}"
-            
-            # Make direct PUT request with credentials
+        presigned_url = await asyncio.get_event_loop().run_in_executor(_executor, _get_presigned_url)
+        
+        # Upload using the presigned URL
+        def _upload_with_presigned():
             response = requests.put(
-                endpoint_url,
+                presigned_url,
                 data=content,
-                headers=headers,
-                auth=AWSRequestsAuth(
-                    aws_access_key=settings.AWS_ACCESS_KEY_ID,
-                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                    aws_host=f"{bucket_name}.s3.{settings.AWS_REGION}.amazonaws.com",
-                    aws_region=settings.AWS_REGION,
-                    aws_service='s3'
-                )
+                headers={'Content-Type': 'application/pdf'}
             )
             
             if response.status_code not in (200, 204):
-                logger.error(f"S3 upload failed: {response.status_code} - {response.text}")
-                raise Exception(f"S3 upload failed: {response.status_code}")
+                raise Exception(f"Presigned upload failed: {response.status_code}")
                 
             return f"s3://{bucket_name}/{path}"
             
-        s3_url = await asyncio.get_event_loop().run_in_executor(_executor, _upload)
-        logger.info(f"Uploaded file to {s3_url}")
+        s3_url = await asyncio.get_event_loop().run_in_executor(_executor, _upload_with_presigned)
+        logger.info(f"Uploaded file using presigned URL to {s3_url}")
         return s3_url
-        
-    except Exception as e:
-        logger.error(f"Error uploading to S3: {str(e)}")
-        # Fall back to alternative method if direct upload fails
-        try:
-            logger.info("Trying alternative upload method...")
-            # Get a pre-signed URL for PUT request
-            def _get_presigned_url():
-                presigned_url = s3_client.generate_presigned_url(
-                    'put_object',
-                    Params={'Bucket': bucket_name, 'Key': path, 'ContentType': 'application/pdf'},
-                    ExpiresIn=3600
-                )
-                return presigned_url
-                
-            presigned_url = await asyncio.get_event_loop().run_in_executor(_executor, _get_presigned_url)
             
-            # Upload using the presigned URL
-            def _upload_with_presigned():
-                response = requests.put(
-                    presigned_url,
-                    data=content,
-                    headers={'Content-Type': 'application/pdf'}
+    except Exception as e:
+        logger.error(f"Error with upload: {str(e)}")
+        # Last resort - attempt to use boto3 directly with error details
+        try:
+            logger.info("Attempting direct boto3 upload as last resort...")
+            
+            def _last_resort_upload():
+                # Direct upload without streaming
+                response = s3_client.put_object(
+                    Bucket=bucket_name,
+                    Key=path,
+                    Body=content,
+                    ContentType='application/pdf'
                 )
-                
-                if response.status_code not in (200, 204):
-                    raise Exception(f"Presigned upload failed: {response.status_code}")
-                    
+                logger.info(f"Last resort upload response: {response}")
                 return f"s3://{bucket_name}/{path}"
                 
-            s3_url = await asyncio.get_event_loop().run_in_executor(_executor, _upload_with_presigned)
-            logger.info(f"Uploaded file using presigned URL to {s3_url}")
+            s3_url = await asyncio.get_event_loop().run_in_executor(_executor, _last_resort_upload)
+            logger.info(f"Last resort upload succeeded to {s3_url}")
             return s3_url
-            
-        except Exception as inner_e:
-            logger.error(f"Error with alternative upload: {str(inner_e)}")
-            # Last resort - attempt to use boto3 directly with error details
-            try:
-                logger.info("Attempting direct boto3 upload as last resort...")
-                
-                def _last_resort_upload():
-                    # Direct upload without streaming
-                    response = s3_client.put_object(
-                        Bucket=bucket_name,
-                        Key=path,
-                        Body=content,
-                        ContentType='application/pdf'
-                    )
-                    logger.info(f"Last resort upload response: {response}")
-                    return f"s3://{bucket_name}/{path}"
-                    
-                s3_url = await asyncio.get_event_loop().run_in_executor(_executor, _last_resort_upload)
-                logger.info(f"Last resort upload succeeded to {s3_url}")
-                return s3_url
-            except Exception as final_e:
-                logger.error(f"All upload methods failed. Final error: {str(final_e)}")
-                raise Exception(f"Could not upload file using any method: {str(e)} -> {str(inner_e)} -> {str(final_e)}")
+        except Exception as final_e:
+            logger.error(f"All upload methods failed. Final error: {str(final_e)}")
+            raise Exception(f"Could not upload file using any method: {str(e)} -> {str(final_e)}")
 
-def get_signed_url(s3_url: str, expiration: int = 3600) -> str:
+async def upload_to_s3_public(content: bytes, path: str) -> str:
+    """
+    Upload content to S3 bucket and return a direct public URL.
+    
+    Args:
+        content: File content as bytes
+        path: Path within bucket
+        
+    Returns:
+        Public URL for the uploaded file
+    """
+    bucket_name = settings.S3_BUCKET_NAME
+    
+    try:
+        logger.info(f"Uploading to S3 with public URL: {path}")
+        
+        def _upload_public():
+            # Upload without ACL
+            response = s3_client.put_object(
+                Bucket=bucket_name,
+                Key=path,
+                Body=content,
+                ContentType='application/pdf'
+            )
+            logger.info(f"Public upload response: {response}")
+            
+            # Return direct URL, not s3:// format
+            return f"https://{bucket_name}.s3.{settings.AWS_REGION}.amazonaws.com/{path}"
+        
+        public_url = await asyncio.get_event_loop().run_in_executor(_executor, _upload_public)
+        logger.info(f"Uploaded file with public access URL: {public_url}")
+        return public_url
+        
+    except Exception as e:
+        logger.error(f"Error with public upload: {str(e)}")
+        raise Exception(f"Could not upload file with public access: {str(e)}")
+
+def get_signed_url(s3_url: str, expiration: int = 31536000) -> str:
     """
     Generate a signed URL for accessing a file in S3.
     
     Args:
         s3_url: S3 URL in format s3://bucket-name/path/to/file
-        expiration: URL expiration time in seconds
+        expiration: URL expiration time in seconds (default: 1 year)
         
     Returns:
         Presigned URL for accessing the file

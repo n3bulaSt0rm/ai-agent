@@ -54,10 +54,10 @@ class GmailHandler:
         # Poll interval in seconds
         self.poll_interval = 60
         
-        # Initialize DeepSeek client
-        self.deepseek_api_key = os.environ.get('DEEPSEEK_API_KEY')
+        # Initialize DeepSeek client using settings
+        self.deepseek_api_key = settings.DEEPSEEK_API_KEY
         if not self.deepseek_api_key:
-            logger.warning("DEEPSEEK_API_KEY not found in environment variables")
+            logger.warning("DEEPSEEK_API_KEY not set in settings")
             
     def authenticate(self) -> None:
         """
@@ -282,16 +282,16 @@ Relevant Information:
 Please draft a professional email response that addresses the user's query using the relevant information provided. The response should be clear, concise, and formatted as an email.
 """
             
-            # Call DeepSeek API
+            # Call DeepSeek API using settings
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "https://api.deepseek.com/v1/chat/completions",
+                    settings.DEEPSEEK_API_ENDPOINT,
                     headers={
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {self.deepseek_api_key}"
                     },
                     json={
-                        "model": "deepseek-chat",
+                        "model": settings.DEEPSEEK_MODEL,
                         "messages": [
                             {"role": "system", "content": "You are a helpful assistant that drafts emails."},
                             {"role": "user", "content": prompt}
