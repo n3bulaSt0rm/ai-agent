@@ -731,7 +731,7 @@ if __name__ == "__main__":
         embedding_module = VietnameseEmbeddingModule(
             qdrant_host="localhost",
             qdrant_port=6333,
-            collection_name="vietnamese_chunks_test",
+            collection_name="vietnamese_documents",
             model_name="bkai-foundation-models/vietnamese-bi-encoder"
         )
         

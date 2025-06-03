@@ -58,6 +58,24 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e74c3c'%3E%3Cpath d='M8 16h8v2H8zm0-4h8v2H8zm6-10H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z'/%3E%3C/svg%3E");
 }
 
+/* Add the document-type-large class to match the modal style */
+.document-type-large {
+  width: 72px;
+  height: 72px;
+  margin-right: 1.5rem;
+  background-color: #EFF6FF;
+  border-radius: 6px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 40px;
+  flex-shrink: 0;
+}
+
+.document-type-large.pdf {
+  background-color: #FEF2F2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 384 512'%3E%3Cpath fill='%23EF4444' d='M320 464C328.8 464 336 456.8 336 448V416H384V448C384 483.3 355.3 512 320 512H64C28.65 512 0 483.3 0 448V416H48V448C48 456.8 55.16 464 64 464H320zM256 160C238.3 160 224 145.7 224 128V48H64C55.16 48 48 55.16 48 64V192H0V64C0 28.65 28.65 0 64 0H229.5C246.5 0 262.7 6.743 274.7 18.75L365.3 109.3C377.3 121.3 384 137.5 384 154.5V192H336V160H256zM88 224C118.9 224 144 249.1 144 280C144 310.9 118.9 336 88 336H80V368H32V224H88zM112 280C112 267.3 101.3 256 88 256H80V304H88C101.3 304 112 292.7 112 280zM160 224H208C229 224 240 238.3 240 256C240 268.9 231.3 280.2 220 283.4C230.7 286.7 240 295.3 240 312C240 330.7 229 352 208 352H160V224zM192 352V320H208C214.1 320 224 316.1 224 312C224 307.9 214.1 304 208 304H192V272H208C214.1 272 224 268.1 224 256C224 251.9 214.1 248 208 248H192V352zM304 224H352V272H328V288H352V320H328V368H304V224z'/%3E%3C/svg%3E");
+}
+
 .document-hero-content h1 {
   font-size: 1.5rem;
   margin: 0 0 0.75rem;
@@ -622,7 +640,7 @@
 }
 
 /* Modal styles */
-.modal-container {
+.file-detail .modal-container {
   position: fixed;
   top: 0;
   left: 0;
@@ -635,7 +653,7 @@
   z-index: 1000;
 }
 
-.modal {
+.file-detail .modal {
   background-color: white;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
@@ -647,7 +665,7 @@
   overflow: hidden;
 }
 
-.modal-header {
+.file-detail .modal-header {
   padding: 16px 24px;
   border-bottom: 1px solid #f0f0f0;
   display: flex;
@@ -655,13 +673,13 @@
   align-items: center;
 }
 
-.modal-header h2 {
+.file-detail .modal-header h2 {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
 }
 
-.close-button {
+.file-detail .close-button {
   background: none;
   border: none;
   font-size: 24px;
@@ -669,12 +687,12 @@
   color: #666;
 }
 
-.modal-body {
+.file-detail .modal-body {
   padding: 24px;
   overflow-y: auto;
 }
 
-.modal-footer {
+.file-detail .modal-footer {
   padding: 16px 24px;
   border-top: 1px solid #f0f0f0;
   display: flex;
@@ -683,27 +701,27 @@
 }
 
 /* Page Range Modal Styles */
-.page-range-row {
+.file-detail .page-range-row {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
   gap: 10px;
 }
 
-.range-inputs {
+.file-detail .range-inputs {
   display: flex;
   gap: 16px;
   flex: 1;
 }
 
-.range-inputs label {
+.file-detail .range-inputs label {
   display: flex;
   align-items: center;
   gap: 8px;
   font-weight: 500;
 }
 
-.range-inputs input {
+.file-detail .range-inputs input {
   width: 70px;
   padding: 6px 10px;
   border: 1px solid #ddd;
@@ -711,11 +729,11 @@
   font-size: 14px;
 }
 
-.modal-actions {
+.file-detail .modal-actions {
   margin-top: 16px;
 }
 
-.error-message {
+.file-detail .error-message {
   background-color: #fff1f0;
   color: #cf1322;
   padding: 10px;
@@ -724,7 +742,7 @@
   border: 1px solid #ffa39e;
 }
 
-.btn-icon {
+.file-detail .btn-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -736,16 +754,182 @@
   color: #666;
 }
 
-.btn-icon:hover {
+.file-detail .btn-icon:hover {
   background-color: #f5f5f5;
 }
 
-.btn-icon:disabled {
+.file-detail .btn-icon:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.btn-icon svg {
-  width: 18px;
-  height: 18px;
+/* Add styling for the new edit functionality */
+.file-detail .description-section {
+  margin-bottom: 24px;
+}
+
+.file-detail .description-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.file-detail .description-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  color: #334155;
+}
+
+.file-detail .btn-icon {
+  background: none;
+  border: none;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.file-detail .btn-icon:hover {
+  background-color: #f8fafc;
+  color: var(--primary-color);
+}
+
+.file-detail .edit-description {
+  margin-bottom: 24px;
+}
+
+.file-detail .description-textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  margin-bottom: 12px;
+  font-family: inherit;
+}
+
+.file-detail .description-textarea:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.1);
+}
+
+.file-detail .edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.file-detail .btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+}
+
+.file-detail .detail-value-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-detail .edit-date {
+  padding: 12px;
+  background-color: #f8fafc;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  border: 1px solid #e2e8f0;
+}
+
+.file-detail .date-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.file-detail .date-input {
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.file-detail .date-input:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
+.file-detail .card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.file-detail .card-header h2 {
+  margin: 0;
+}
+
+.file-detail .keywords-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.file-detail .keyword-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.file-detail .keyword-tag {
+  background-color: rgba(var(--primary-rgb), 0.1);
+  color: var(--primary-color);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.file-detail .keywords-edit {
+  padding: 12px;
+  background-color: #f8fafc;
+  border-radius: 6px;
+  margin: 12px 0 16px;
+  border: 1px solid #e2e8f0;
+  display: none;
+}
+
+.file-detail .keywords-edit.show {
+  display: block;
+}
+
+.file-detail .keywords-input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.file-detail .w-4 {
+  width: 16px;
+}
+
+.file-detail .h-4 {
+  height: 16px;
+}
+
+.file-detail .mr-1 {
+  margin-right: 4px;
 } 

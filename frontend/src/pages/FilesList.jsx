@@ -4,6 +4,8 @@ import { toast } from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import FileUploader from '../components/FileUploader';
 import Pagination from '../components/Pagination';
+import LoadingOverlay from '../components/LoadingOverlay';
+import '../styles/LoadingOverlay.css';
 import filesApi from '../services/api';
 
 // Direct import specific icons with a different method
@@ -100,6 +102,11 @@ const FilesList = () => {
   const [documentToProcess, setDocumentToProcess] = useState(null);
   const [pageRanges, setPageRanges] = useState([{ start: 1, end: 1 }]);
   const [pageRangeError, setPageRangeError] = useState("");
+  
+  const [loadingAction, setLoadingAction] = useState({ isLoading: false, message: '' });
+  
+  // Add function to handle file_created_at updates
+  const [fileCreatedAtInput, setFileCreatedAtInput] = useState('');
   
   // For now, use the mock data. In a real implementation, this would be API data
   useEffect(() => {
@@ -205,30 +212,38 @@ const FilesList = () => {
       setPageRanges([{ start: 1, end: doc.pages }]);
     } else {
       // Find unprocessed ranges
-      const sortedRanges = existingRanges.sort((a, b) => a.start - b.start);
+      // Build set of processed pages
+      const processedPages = new Set();
+      existingRanges.forEach(range => {
+        try {
+          const [start, end] = range.split('-').map(num => parseInt(num, 10));
+          for (let page = start; page <= end; page++) {
+            processedPages.add(page);
+          }
+        } catch (e) {
+          console.error("Error parsing range:", range, e);
+        }
+      });
+      
+      // Find unprocessed page ranges
       const unprocessedRanges = [];
+      let currentStart = null;
       
-      // Check from beginning of document
-      if (sortedRanges[0].start > 1) {
-        unprocessedRanges.push({ start: 1, end: sortedRanges[0].start - 1 });
-      }
-      
-      // Check between processed ranges
-      for (let i = 0; i < sortedRanges.length - 1; i++) {
-        if (sortedRanges[i].end + 1 < sortedRanges[i+1].start) {
-          unprocessedRanges.push({
-            start: sortedRanges[i].end + 1, 
-            end: sortedRanges[i+1].start - 1
-          });
+      for (let page = 1; page <= doc.pages; page++) {
+        if (!processedPages.has(page)) {
+          if (currentStart === null) {
+            currentStart = page;
+          }
+        } else if (currentStart !== null) {
+          // End of a range
+          unprocessedRanges.push({ start: currentStart, end: page - 1 });
+          currentStart = null;
         }
       }
       
-      // Check end of document
-      if (sortedRanges[sortedRanges.length - 1].end < doc.pages) {
-        unprocessedRanges.push({
-          start: sortedRanges[sortedRanges.length - 1].end + 1,
-          end: doc.pages
-        });
+      // Check if we have an open range at the end
+      if (currentStart !== null) {
+        unprocessedRanges.push({ start: currentStart, end: doc.pages });
       }
       
       if (unprocessedRanges.length > 0) {
@@ -298,11 +313,16 @@ const FilesList = () => {
           if (Array.isArray(existingRanges)) {
             for (const newRange of pageRanges) {
               for (const existingRange of existingRanges) {
-                if (
-                  (newRange.start <= existingRange.end && newRange.end >= existingRange.start)
-                ) {
-                  setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRange.start}-${existingRange.end}`);
-                  return;
+                try {
+                  const [start, end] = existingRange.split('-').map(num => parseInt(num, 10));
+                  if (
+                    (newRange.start <= end && newRange.end >= start)
+                  ) {
+                    setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRange}`);
+                    return;
+                  }
+                } catch (e) {
+                  console.error("Error parsing range:", existingRange, e);
                 }
               }
             }
@@ -312,13 +332,24 @@ const FilesList = () => {
         }
       }
       
-      await filesApi.processFile(documentToProcess.id, { page_ranges: pageRanges });
-      toast.success(`Processing "${documentToProcess.title}"...`);
+      // Convert page ranges to the new string format expected by the backend
+      const pageRangesStrings = pageRanges.map(range => `${range.start}-${range.end}`);
+      
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Processing document...' });
       setShowProcessModal(false);
+      
+      // Use the string version of the ranges
+      console.log("Sending page ranges:", pageRangesStrings);
+      await filesApi.processFile(documentToProcess.id, { page_ranges: pageRangesStrings });
+      toast.success(`Processing "${documentToProcess.title}"...`);
+      
       fetchDocuments(currentDocumentsPage); // Refresh list after processing starts
     } catch (error) {
       console.error(`Error processing document: ${error}`);
       toast.error('Failed to process document');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
     }
   };
   
@@ -329,6 +360,10 @@ const FilesList = () => {
   
   const confirmDelete = async () => {
     try {
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Deleting document...' });
+      setShowDeleteConfirm(false);
+      
       await filesApi.deleteFile(selectedDocument.id);
       toast.success(`"${selectedDocument.title}" moved to trash.`);
       
@@ -338,13 +373,16 @@ const FilesList = () => {
       console.error('Error deleting document:', error);
       toast.error('Failed to delete document');
     } finally {
-      setShowDeleteConfirm(false);
+      setLoadingAction({ isLoading: false, message: '' });
       setSelectedDocument(null);
     }
   };
   
   const restoreDocument = async (doc) => {
     try {
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Restoring document...' });
+      
       await filesApi.restoreFile(doc.id);
       toast.success(`"${doc.title}" restored.`);
       
@@ -353,6 +391,8 @@ const FilesList = () => {
     } catch (error) {
       console.error('Error restoring document:', error);
       toast.error('Failed to restore document');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
     }
   };
   
@@ -362,21 +402,44 @@ const FilesList = () => {
   };
   
   const handleFileSelected = (file) => {
+    // Memastikan keywords dipertahankan dalam objek file
+    if (file) {
+      console.log('File selected with keywords:', file.keywords);
+    }
     setSelectedFile(file);
-    console.log('File selected:', file);
-    // In a real app, you would enable the upload button and prepare for form submission
   };
   
   // Handle file upload
   const handleUpload = async () => {
-    if (!selectedFile) return;
+    if (!selectedFile) {
+      console.error('No file selected for upload');
+      toast.error('Please select a file to upload');
+      return;
+    }
     
     try {
+      console.log('FilesList - Uploading file:', selectedFile.name);
+      console.log('FilesList - File object type:', selectedFile instanceof File ? 'File object' : typeof selectedFile);
+      console.log('FilesList - File metadata:', {
+        name: selectedFile.name,
+        size: selectedFile.size,
+        type: selectedFile.type,
+        createdAt: selectedFile.fileCreatedAt,
+        keywords: selectedFile.keywords
+      });
+      
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Uploading file...' });
+      setShowUploadModal(false);
+      
+      // Pastikan kita mengirimkan keywords yang tepat ke API
+      const keywords = selectedFile.keywords || '';
+      
       const response = await filesApi.uploadFile(
         selectedFile, 
         selectedFile.description || 'Uploaded document',
         selectedFile.fileCreatedAt,
-        selectedFile.keywords
+        keywords
       );
       
       toast.success(`"${selectedFile.name}" uploaded successfully.`);
@@ -386,11 +449,12 @@ const FilesList = () => {
       setCurrentDocumentsPage(1);
       
       // Close modal and reset state
-      setShowUploadModal(false);
       setSelectedFile(null);
     } catch (error) {
       console.error('Error uploading file:', error);
-      toast.error('Failed to upload file');
+      toast.error('Failed to upload file: ' + (error.message || 'Unknown error'));
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
     }
   };
   
@@ -480,6 +544,8 @@ const FilesList = () => {
       ...doc,
       keywords: doc.keywords || [] // Get keywords directly
     });
+    setKeywordsInput(doc.keywords ? doc.keywords.join(', ') : '');
+    setFileCreatedAtInput(doc.fileCreatedAt || '');
     setShowDetailModal(true);
   };
   
@@ -582,16 +648,17 @@ const FilesList = () => {
     if (!fileToView) return;
     
     try {
-      // Parse keywords into array
-      const keywordArray = keywordsInput
-        .split(',')
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Updating keywords...' });
+      
+      // Call API to update keywords with the raw input string
+      await filesApi.updateKeywords(fileToView.id, keywordsInput);
+      
+      // Update local state - for display purposes, we still parse to array
+      const keywordArray = keywordsInput.split(',')
         .map(k => k.trim())
         .filter(k => k);
       
-      // Call API to update keywords
-      await filesApi.updateKeywords(fileToView.id, keywordArray);
-      
-      // Update local state
       setFileToView({
         ...fileToView,
         keywords: keywordArray
@@ -602,11 +669,46 @@ const FilesList = () => {
     } catch (error) {
       console.error('Error updating keywords:', error);
       toast.error('Failed to update keywords');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
+    }
+  };
+  
+  // Add function to handle file created date update
+  const handleFileCreatedAtUpdate = async () => {
+    if (!fileToView) return;
+    
+    try {
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Updating file date...' });
+      
+      // Call API to update file created date
+      await filesApi.updateFileCreatedAt(fileToView.id, fileCreatedAtInput);
+      
+      // Update local state
+      setFileToView({
+        ...fileToView,
+        fileCreatedAt: fileCreatedAtInput
+      });
+      
+      toast.success('File creation date updated successfully');
+      
+    } catch (error) {
+      console.error('Error updating file creation date:', error);
+      toast.error('Failed to update file creation date');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
     }
   };
   
   return (
-    <div className="page-container">
+    <div className="page-container files-list">
+      {/* Loading overlay */}
+      <LoadingOverlay 
+        isVisible={loadingAction.isLoading}
+        message={loadingAction.message}
+      />
+      
       <div className="page-header">
         <div>
           <h1>Documents</h1>
@@ -1091,41 +1193,50 @@ const FilesList = () => {
               <button className="close-btn" onClick={() => setShowDetailModal(false)}>×</button>
             </div>
             <div className="modal-body">
+              <div className="document-icon-container">
+                <div className={`document-type-large ${fileToView.type}`}></div>
+                <h3 className="document-title-large">{fileToView.title}</h3>
+              </div>
+              
+              <div className="detail-tabs">
+                <div className="detail-tab active">Details</div>
+              </div>
+              
               <div className="detail-grid">
-                <div className="detail-row">
-                  <span className="detail-label">File Name:</span>
-                  <span className="detail-value">{fileToView.title}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Size:</span>
-                  <span className="detail-value">{fileToView.size}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Pages:</span>
-                  <span className="detail-value">{fileToView.pages}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Status:</span>
-                  <span className="detail-value">{getStatusBadge(fileToView.status)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Upload Date:</span>
-                  <span className="detail-value">{formatDate(fileToView.uploadAt)}</span>
-                </div>
-                <div className="detail-row">
-                  <span className="detail-label">Created Date:</span>
-                  <span className="detail-value">{formatDate(fileToView.fileCreatedAt)}</span>
-                </div>
-                {fileToView.description && (
+                <div className="detail-section">
+                  <h4 className="detail-section-title">General Information</h4>
                   <div className="detail-row">
-                    <span className="detail-label">Description:</span>
-                    <span className="detail-value">{fileToView.description}</span>
+                    <span className="detail-label">Size:</span>
+                    <span className="detail-value">{fileToView.size}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Pages:</span>
+                    <span className="detail-value">{fileToView.pages}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Status:</span>
+                    <span className="detail-value">{getStatusBadge(fileToView.status)}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Upload Date:</span>
+                    <span className="detail-value">{formatDate(fileToView.uploadAt)}</span>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-label">Created Date:</span>
+                    <span className="detail-value">{formatDate(fileToView.fileCreatedAt)}</span>
+                  </div>
+                </div>
+                
+                {fileToView.description && (
+                  <div className="detail-section">
+                    <h4 className="detail-section-title">Description</h4>
+                    <div className="detail-description">{fileToView.description}</div>
                   </div>
                 )}
                 
-                <div className="detail-row keywords-section">
-                  <span className="detail-label">Keywords:</span>
-                  <div className="detail-value keyword-tags">
+                <div className="detail-section keywords-section">
+                  <h4 className="detail-section-title">Keywords</h4>
+                  <div className="keyword-tags">
                     {fileToView.keywords && fileToView.keywords.length > 0 ? (
                       fileToView.keywords.map((keyword, index) => (
                         <span key={index} className="keyword-tag">{keyword}</span>
@@ -1134,10 +1245,8 @@ const FilesList = () => {
                       <span className="no-keywords">No keywords</span>
                     )}
                   </div>
-                </div>
                 
-                <div className="detail-row keyword-edit-section">
-                  <div className="form-group">
+                  <div className="keyword-edit-section">
                     <label htmlFor="keywords">Edit Keywords (comma separated):</label>
                     <div className="keyword-input-group">
                       <input 
@@ -1153,6 +1262,28 @@ const FilesList = () => {
                         onClick={handleKeywordsUpdate}
                       >
                         Update Keywords
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="detail-section file-date-section">
+                  <h4 className="detail-section-title">Edit Created Date</h4>
+                  <div className="date-edit-section">
+                    <label htmlFor="fileCreatedAt">Update File Creation Date:</label>
+                    <div className="date-input-group">
+                      <input 
+                        type="date" 
+                        id="fileCreatedAt" 
+                        value={toInputDateFormat(fileCreatedAtInput)}
+                        onChange={(e) => setFileCreatedAtInput(e.target.value)}
+                        className="form-control"
+                      />
+                      <button 
+                        className="btn-primary save-date"
+                        onClick={handleFileCreatedAtUpdate}
+                      >
+                        Update Date
                       </button>
                     </div>
                   </div>
@@ -1177,6 +1308,7 @@ const FilesList = () => {
                       setShowDetailModal(false);
                     }}
                   >
+                    <ArrowPathIcon className="w-5 h-5 mr-2" />
                     Process Document
                   </button>
                 )}
@@ -1188,8 +1320,8 @@ const FilesList = () => {
       
       {/* Process Page Range Modal */}
       {showProcessModal && documentToProcess && (
-        <div className="modal-container">
-          <div className="modal">
+        <div className="modal-overlay">
+          <div className="modal-content">
             <div className="modal-header">
               <h2>Process Document</h2>
               <button className="close-button" onClick={() => setShowProcessModal(false)}>×</button>

@@ -29,8 +29,7 @@ class MetadataDB:
                 filename TEXT NOT NULL,
                 file_size INTEGER NOT NULL,
                 content_type TEXT NOT NULL,
-                object_url TEXT,
-                s3_uri TEXT NOT NULL,
+                object_url TEXT NOT NULL,
                 upload_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 previous_status TEXT,
@@ -119,7 +118,7 @@ class MetadataDB:
             return False, None
     
     def add_pdf_file(self, filename: str, file_size: int, 
-                     content_type: str, s3_uri: str, object_url: str = None, description: str = None, 
+                     content_type: str, object_url: str, description: str = None, 
                      file_created_at: str = None, pages: int = 0, uuid: str = None, keywords: str = None) -> int:
         """
         Add a new file to the database.
@@ -128,7 +127,6 @@ class MetadataDB:
             filename: Original filename
             file_size: Size in bytes
             content_type: File content type (e.g., 'application/pdf')
-            s3_uri: Amazon S3 URI
             object_url: Public URL for the file
             description: File description
             file_created_at: When the file was created (if known)
@@ -148,10 +146,10 @@ class MetadataDB:
         with self.conn:
             cursor = self.conn.execute(
                 '''INSERT INTO files_management 
-                   (uuid, filename, file_size, content_type, s3_uri, object_url,
+                   (uuid, filename, file_size, content_type, object_url,
                     upload_at, description, file_created_at, updated_at, pages, status, keywords) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (uuid, filename, file_size, content_type, s3_uri, object_url,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (uuid, filename, file_size, content_type, object_url,
                  now, description, file_created_at or now, now, pages, 'pending', keywords)
             )
             file_id = cursor.lastrowid

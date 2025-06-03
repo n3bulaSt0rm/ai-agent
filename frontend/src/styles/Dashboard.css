@@ -322,6 +322,28 @@ html, body {
   background-color: var(--green, #10b981);
 }
 
+.status-value.degraded .status-dot {
+  background-color: var(--warning-color, #f59e0b);
+}
+
+.status-value.offline .status-dot {
+  background-color: var(--danger-color, #ef4444);
+}
+
+.status-value.unknown .status-dot {
+  background-color: var(--gray, #9ca3af);
+}
+
+.status-message {
+  font-size: 0.75rem;
+  color: var(--text-light);
+  margin-top: 0.25rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-metric {
   font-weight: 600;
   color: var(--text-dark);
@@ -497,8 +519,8 @@ html, body {
 }
 
 .processing-indicator {
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -507,16 +529,24 @@ html, body {
 }
 
 .processing-spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(245, 158, 11, 0.1);
+  width: 24px;
+  height: 24px;
+  display: block;
+  border: 3px solid transparent;
   border-top-color: #f59e0b;
+  border-left-color: #f59e0b;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spinner-spin 1s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@keyframes spinner-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes spinner-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .deleted-item {
@@ -1013,6 +1043,28 @@ html, body {
   background-color: var(--green, #10b981);
 }
 
+.status-value.degraded .status-dot {
+  background-color: var(--warning-color, #f59e0b);
+}
+
+.status-value.offline .status-dot {
+  background-color: var(--danger-color, #ef4444);
+}
+
+.status-value.unknown .status-dot {
+  background-color: var(--gray, #9ca3af);
+}
+
+.status-message {
+  font-size: 0.75rem;
+  color: var(--text-light);
+  margin-top: 0.25rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-metric {
   font-weight: 600;
   color: var(--text-dark);
@@ -1115,4 +1167,35 @@ html, body {
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
+}
+
+.processing-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4F46E5;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+}
+
+.processing-icon-circle {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='2' stroke='%234F46E5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' /%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 } 

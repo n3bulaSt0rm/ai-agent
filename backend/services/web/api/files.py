@@ -22,9 +22,10 @@ class FileUpdateRequest(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = None
     keywords: Optional[Union[str, List[str]]] = None
+    file_created_at: Optional[str] = None
 
 class ProcessFileRequest(BaseModel):
-    page_ranges: Optional[List[Dict[str, int]]] = None  # List of {start: int, end: int}
+    page_ranges: Optional[List[str]] = None  # List of strings in format "start-end" (e.g. "1-5")
 
 @router.post("/upload")
 async def upload_file(
@@ -58,27 +59,19 @@ async def upload_file(
         
         # Upload to S3 with public-read ACL
         s3_path = f"files/{unique_id}_{safe_filename}"
-        s3_url = await upload_to_s3(content, s3_path)  # Keep original s3_url for internal use
         
         # Get direct public URL
         public_url = await upload_to_s3_public(content, s3_path)
         
         # Process keywords - simply use provided string directly
-        keywords_str = keywords or ""
+        keywords_str = keywords or ""        
         # Clean up keywords string: remove extra spaces, ensure comma separation
-        keywords_str = ",".join([k.strip() for k in keywords_str.split(',') if k.strip()])
+        if keywords_str:
+            keywords_str = ",".join([k.strip() for k in keywords_str.split(',') if k.strip()])
+            print(f"Processed keywords string: '{keywords_str}'")
         
         # Parse keywords into list for response
         keyword_list = [k.strip() for k in keywords_str.split(',') if k.strip()] if keywords_str else []
-        
-        # Create metadata
-        metadata = {
-            "original_extension": os.path.splitext(file.filename)[1],
-            "content_type": file.content_type,
-            "upload_timestamp": datetime.now().isoformat(),
-            "uuid": unique_id,
-            "keywords": keywords_str
-        }
         
         # Store in database
         db = get_metadata_db()
@@ -89,10 +82,9 @@ async def upload_file(
             filename=safe_filename,
             file_size=file_size,
             content_type=file.content_type or "application/pdf",
-            s3_uri=s3_url,
             object_url=public_url,  # Use public URL here
             description=description,
-            file_created_at=file_created_at or current_time,
+            file_created_at=file_created_at,
             keywords=keywords_str,
             uuid=unique_id,
             pages=pdf_pages
@@ -108,7 +100,6 @@ async def upload_file(
             "fileCreatedAt": file_created_at or current_time,
             "updatedAt": current_time,
             "uuid": unique_id,
-            "s3_url": s3_url,
             "object_url": public_url,  # Include public URL in response
             "status": "pending_upload",
             "description": description,
@@ -135,9 +126,6 @@ async def list_files(
     Unified endpoint for listing all files with filtering, searching, and sorting
     """
     try:
-        # Log request parameters for debugging
-        params = dict(request.query_params)
-        print(f"Files API params: {params}")
         
         # Initialize database connection
         db = get_metadata_db()
@@ -310,16 +298,13 @@ async def list_files(
         # Format files for frontend
         response_files = []
         for file_data in files:
-            # Generate signed URL for viewing
-            view_url = get_signed_url(file_data["s3_uri"], expiration=3600)
-            
             # Parse keywords if present
             keywords = []
-            if file_data.get("keywords"):
-                # Parse comma-separated string to list
-                keywords = [k.strip() for k in file_data.get("keywords").split(',') if k.strip()]
-                print(f"Processing file {file_data['id']} with keywords: {file_data.get('keywords')} -> {keywords}")
+            raw_keywords = file_data.get("keywords", "")
             
+            if raw_keywords:
+                # Parse comma-separated string to list
+                keywords = [k.strip() for k in raw_keywords.split(',') if k.strip()]            
             # Format for frontend
             formatted_file = {
                 "id": file_data["id"],
@@ -336,10 +321,9 @@ async def list_files(
                 "uploadedBy": file_data.get("uploaded_by", "admin"),
                 "keywords": keywords,
                 "pages_processed_range": file_data.get("pages_processed_range", ""),
-                "link": view_url,
+                "link": file_data["object_url"],
                 "filename": file_data["filename"],
-                "s3_uri": file_data["s3_uri"],
-                "view_url": view_url
+                "view_url": file_data["object_url"]
             }
             
             # Special handling for deleted files
@@ -388,23 +372,46 @@ async def list_files(
 @router.get("/stats")
 async def get_file_stats():
     """
-    Get file statistics for dashboard
+    Get file statistics for dashboard including storage usage
     """
     try:
+        # Get metadata DB
         db = get_metadata_db()
-        # Get total active files (not deleted)
+        
+        # Get file stats by status
         total_files = db.get_pdf_file_count(exclude_status="deleted")
         pending_files = db.get_pdf_file_count(status="pending")
         processing_files = db.get_pdf_file_count(status="processing")
         processed_files = db.get_pdf_file_count(status="processed")
         trash_files = db.get_pdf_file_count(status="deleted")
         
+        # Calculate total storage used (in bytes)
+        cursor = db.conn.execute("SELECT SUM(file_size) as total_size FROM files_management")
+        row = cursor.fetchone()
+        total_size_bytes = row["total_size"] if row["total_size"] is not None else 0
+        
+        # Convert to MB with 2 decimal precision
+        total_size_mb = round(total_size_bytes / (1024 * 1024), 2)
+        
+        # Get storage limit from settings (default 1000MB if not set)
+        storage_limit_mb = getattr(settings, "STORAGE_LIMIT_MB", 1000)
+        
+        # Calculate percentage
+        storage_percentage = round((total_size_mb / storage_limit_mb) * 100) if storage_limit_mb > 0 else 0
+        
+        # Format the response
         return {
             "total": total_files,
             "pending": pending_files,
             "processing": processing_files,
             "processed": processed_files,
-            "trash": trash_files
+            "trash": trash_files,
+            "storage": {
+                "used_mb": total_size_mb,
+                "limit_mb": storage_limit_mb,
+                "percentage": storage_percentage
+            },
+            "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         print(f"Error getting file stats: {str(e)}")
@@ -423,14 +430,15 @@ async def get_file(file_id: int):
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
         
-        # Generate signed URL for viewing
-        view_url = get_signed_url(file["s3_uri"], expiration=3600)
-        
         # Parse keywords if present
         keywords = []
-        if file.get("keywords"):
+        raw_keywords = file.get("keywords", "")
+        print(f"Raw keywords from DB for file {file_id}: '{raw_keywords}'")
+        
+        if raw_keywords:
             # Parse comma-separated string to list
-            keywords = [k.strip() for k in file.get("keywords").split(',') if k.strip()]
+            keywords = [k.strip() for k in raw_keywords.split(',') if k.strip()]
+            print(f"Processing file {file_id} with keywords: '{raw_keywords}' -> {keywords}")
                 
         # Format response to match frontend expectations
         formatted_file = {
@@ -445,10 +453,9 @@ async def get_file(file_id: int):
             "description": file.get("description", ""),
             "fileCreatedAt": file.get("file_created_at", file["upload_at"]),
             "updatedAt": file.get("updated_at", file["upload_at"]),
-            "link": view_url,
+            "link": file["object_url"],
             "filename": file["filename"],
-            "s3_uri": file["s3_uri"],
-            "view_url": view_url,
+            "view_url": file["object_url"],
             "keywords": keywords,
             "pages_processed_range": file.get("pages_processed_range")
         }
@@ -479,8 +486,11 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
                 
-        if file["status"] == "processing":
+        if file["status"] == "processing" or file["status"] == "preparing":
             raise HTTPException(status_code=400, detail="File is already being processed")
+            
+        if file["status"] == "processed":
+            return {"message": "File has already been processed", "status": "processed"}
         
         # Get total pages
         total_pages = file.get("pages", 0)
@@ -499,94 +509,113 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         page_ranges_to_process = []
         
         if process_request and process_request.page_ranges:
-            # User specified page ranges
-            page_ranges_to_process = process_request.page_ranges
-            
-            # Validate page ranges
-            for page_range in page_ranges_to_process:
-                if not isinstance(page_range, dict) or "start" not in page_range or "end" not in page_range:
-                    raise HTTPException(status_code=400, detail="Invalid page range format. Expected {start: int, end: int}")
-                
-                start = page_range["start"]
-                end = page_range["end"]
-                
-                if not isinstance(start, int) or not isinstance(end, int):
-                    raise HTTPException(status_code=400, detail="Page range start and end must be integers")
-                
-                if start < 1 or end > total_pages or start > end:
-                    raise HTTPException(status_code=400, 
-                        detail=f"Invalid page range: {start}-{end}. Document has {total_pages} pages.")
-                
-                # Check if range overlaps with already processed ranges
-                for processed_range in current_ranges:
-                    p_start = processed_range["start"]
-                    p_end = processed_range["end"]
-                    
-                    if (start <= p_end and end >= p_start):
+            # User specified page ranges as strings (e.g. "1-5")
+            for range_str in process_request.page_ranges:
+                try:
+                    # Validate format
+                    if not isinstance(range_str, str) or "-" not in range_str:
                         raise HTTPException(status_code=400, 
-                            detail=f"Page range {start}-{end} overlaps with already processed range {p_start}-{p_end}")
+                            detail=f"Invalid page range format: {range_str}. Expected format: 'start-end'")
+                    
+                    # Parse range
+                    start, end = map(int, range_str.split('-'))
+                    
+                    # Validate range
+                    if start < 1 or (total_pages > 0 and end > total_pages) or start > end:
+                        raise HTTPException(status_code=400, 
+                            detail=f"Invalid page range: {range_str}. Document has {total_pages} pages.")
+                    
+                    # Check for overlap with existing ranges
+                    for processed_range in current_ranges:
+                        try:
+                            p_start, p_end = map(int, processed_range.split('-'))
+                            
+                            if (start <= p_end and end >= p_start):
+                                raise HTTPException(status_code=400, 
+                                    detail=f"Page range {range_str} overlaps with already processed range {processed_range}")
+                        except ValueError:
+                            # Skip invalid ranges
+                            continue
+                    
+                    # Add to list of ranges to process
+                    page_ranges_to_process.append(range_str)
+                except ValueError:
+                    raise HTTPException(status_code=400, 
+                        detail=f"Invalid page range format: {range_str}. Expected format: 'start-end' with numeric values")
         else:
             # No ranges specified, process all pages that haven't been processed yet
             if not current_ranges and total_pages > 0:
                 # Process entire document
-                page_ranges_to_process = [{"start": 1, "end": total_pages}]
+                page_ranges_to_process = [f"1-{total_pages}"]
             elif total_pages > 0:
                 # Find unprocessed ranges
-                sorted_ranges = sorted(current_ranges, key=lambda r: r["start"])
+                # Extract and sort all processed page numbers
+                processed_pages = set()
+                for range_str in current_ranges:
+                    try:
+                        start, end = map(int, range_str.split('-'))
+                        for page in range(start, end + 1):
+                            processed_pages.add(page)
+                    except ValueError:
+                        # Skip invalid ranges
+                        continue
                 
-                # Check from beginning of document
-                if sorted_ranges[0]["start"] > 1:
-                    page_ranges_to_process.append({"start": 1, "end": sorted_ranges[0]["start"] - 1})
+                # Find unprocessed pages
+                unprocessed = []
+                current_start = None
                 
-                # Check between processed ranges
-                for i in range(len(sorted_ranges) - 1):
-                    if sorted_ranges[i]["end"] + 1 < sorted_ranges[i+1]["start"]:
-                        page_ranges_to_process.append({
-                            "start": sorted_ranges[i]["end"] + 1,
-                            "end": sorted_ranges[i+1]["start"] - 1
-                        })
+                for page in range(1, total_pages + 1):
+                    if page not in processed_pages:
+                        if current_start is None:
+                            current_start = page
+                    elif current_start is not None:
+                        # End of a range
+                        unprocessed.append(f"{current_start}-{page-1}")
+                        current_start = None
                 
-                # Check end of document
-                if sorted_ranges[-1]["end"] < total_pages:
-                    page_ranges_to_process.append({"start": sorted_ranges[-1]["end"] + 1, "end": total_pages})
+                # Check if we have an open range at the end
+                if current_start is not None:
+                    unprocessed.append(f"{current_start}-{total_pages}")
+                
+                page_ranges_to_process = unprocessed
         
         if not page_ranges_to_process:
             return {"message": "No page ranges to process", "status": file["status"]}
         
-        # Update status to processing
-        db.update_pdf_status(file_id, "processing")
+        # Cập nhật status thành "preparing"
+        db.update_pdf_status(file_id, "preparing")
         
-        # Get keywords from the database
-        keywords_str = file.get("keywords")
-        keywords = []
-        if keywords_str:
-            # Convert comma-separated string to list
-            keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
+        # Get keywords from the database - we need the raw string
+        keywords_str = file.get("keywords", "")
                 
         file_uuid = file.get("uuid")
         file_created_at = file.get("file_created_at")
         
-        # Update processed page ranges
-        new_processed_ranges = current_ranges + page_ranges_to_process
-        db.update_pdf_status(file_id, "processing", pages_processed_range=json.dumps(new_processed_ranges))
+        # Log để debug
+        print(f"Preparing to process file {file_id} with ranges: {page_ranges_to_process}")
         
-        # Send processing requests for each page range
+        # Gửi message cho tất cả các page range
+        # Mỗi range sẽ được xử lý và gọi webhook khi hoàn thành
         for page_range in page_ranges_to_process:
             # Send processing request via messaging service
             message_data = {
                 "file_id": file_uuid,
-                "file_path": file["object_url"] if file.get("object_url") else file["s3_uri"],  # Use object_url if available
+                "file_path": file["object_url"],
                 "file_created_at": file_created_at,
-                "keywords": keywords,
+                "keywords": keywords_str,  # Send the raw keywords string directly
                 "action": "process",
-                "page_range": page_range
+                "page_range": page_range,  # Already in string format "start-end"
+                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"  # URL to call when processing is complete
             }
             
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
+        # Không cập nhật status thành "processing" - để processing_service tự cập nhật
+        # Status sẽ giữ nguyên là "preparing"
+        
         return {
             "message": f"File {file_id} sent for processing",
-            "status": "processing",
+            "status": "preparing",
             "page_ranges": page_ranges_to_process
         }
     except HTTPException:
@@ -595,10 +624,12 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         # Revert status on error
         try:
             db = get_metadata_db()
-            db.update_pdf_status(file_id, "pending", str(e))
-        except:
-            pass
+            db.update_pdf_status(file_id, "pending")
+        except Exception as rollback_error:
+            print(f"Error rolling back status: {rollback_error}")
         
+        print(f"Error processing file: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 @router.delete("/{file_id}")
@@ -629,7 +660,8 @@ async def delete_file(file_id: int):
             # Send message to update vectors in Qdrant (simplified message format)
             message_data = {
                 "file_id": file_uuid,
-                "action": "delete"
+                "action": "delete",
+                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
             }
             
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
@@ -672,8 +704,9 @@ async def restore_file(file_id: int):
             # Send message to restore vectors in Qdrant (simplified message format)
             message_data = {
                 "file_id": file_uuid,
-                "file_path": file["object_url"] if file.get("object_url") else file["s3_uri"],  # Use object_url if available
-                "action": "restore"
+                "file_path": file["object_url"],
+                "action": "restore",
+                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
             }
             
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
@@ -704,6 +737,7 @@ async def update_file(
             raise HTTPException(status_code=404, detail="File not found")
                 
         updates = {}
+        should_publish_message = file["status"] == "processed"
         
         # Update description if provided
         if file_update.description is not None:
@@ -724,6 +758,42 @@ async def update_file(
                 
             db.update_pdf_status(file_id, file_update.status)
             updates["status"] = file_update.status
+            
+            # Update should_publish_message if status was changed to processed
+            if file_update.status == "processed":
+                should_publish_message = True
+
+        # Update file_created_at if provided
+        if file_update.file_created_at is not None:
+            with db.conn:
+                db.conn.execute(
+                    "UPDATE files_management SET file_created_at = ?, updated_at = ? WHERE id = ?",
+                    (file_update.file_created_at, datetime.now().isoformat(), file_id)
+                )
+                
+            updates["file_created_at"] = file_update.file_created_at
+            
+            # Send message to processing service if file is processed
+            if should_publish_message:
+                file_uuid = file.get("uuid")
+                file_path = file.get("object_url")
+                
+                if file_uuid:
+                    # Get keywords for consistency
+                    keywords_str = file.get("keywords", "")
+                    
+                    # Send message to update file_created_at in processing service
+                    message_data = {
+                        "file_id": file_uuid,
+                        "file_path": file_path,
+                        "keywords": keywords_str,
+                        "file_created_at": file_update.file_created_at,
+                        "action": "update_metadata"
+                    }
+                    
+                    await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+                    
+                    print(f"Message sent to processing service for file {file_id} with updated file_created_at: {file_update.file_created_at}")
 
         # Update keywords if provided
         if file_update.keywords is not None:
@@ -749,27 +819,30 @@ async def update_file(
             keyword_list = [k.strip() for k in keywords_str.split(',') if k.strip()] if keywords_str else []
             updates["keywords"] = keyword_list
             
-            # Send message to processing service about keyword update
-            file_uuid = file.get("uuid")
-            file_path = file.get("object_url") if file.get("object_url") else file.get("s3_uri")  # Use object_url if available
-            
-            if file_uuid:
-                # Get file_created_at for consistency 
-                file_created_at = file.get("file_created_at")
+            # Send message to processing service only if status is processed
+            if should_publish_message:
+                file_uuid = file.get("uuid")
+                file_path = file.get("object_url")
                 
-                # Send message to update keywords in processing service
-                message_data = {
-                    "file_id": file_uuid,
-                    "file_path": file_path,
-                    "keywords": keyword_list,
-                    "file_created_at": file_created_at,
-                    "action": "update_keywords"
-                }
-                
-                await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
-                
-                # Log success
-                print(f"Message sent to processing service for file {file_id} with keywords: {keyword_list}")
+                if file_uuid:
+                    # Get file_created_at for consistency 
+                    file_created_at = file_update.file_created_at or file.get("file_created_at")
+                    
+                    # Send message to update keywords in processing service
+                    message_data = {
+                        "file_id": file_uuid,
+                        "file_path": file_path,
+                        "keywords": keywords_str,  # Send the raw keywords string
+                        "file_created_at": file_created_at,
+                        "action": "update_keywords"
+                    }
+                    
+                    await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+                    
+                    # Log success
+                    print(f"Message sent to processing service for file {file_id} with keywords: {keywords_str}")
+            else:
+                print(f"Skipping publish message for file {file_id} as status is not 'processed'")
         
         return {
             "file_id": file_id,

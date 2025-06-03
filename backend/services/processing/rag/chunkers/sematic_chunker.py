@@ -6,27 +6,12 @@ import os
 import re
 from typing import List, Dict, Any
 
-# Đặt đường dẫn đến thư mục NLTK data
-nltk.data.path.append("/home/n3bulast0rm/Documents/Projects/DATN/ai-agent/.venv.production/nltk_data")
-
-# Simple Vietnamese sentence tokenizer function to avoid NLTK issues
-def simple_tokenize(text):
-    """Simple sentence tokenizer for Vietnamese text"""
-    # This regex pattern matches Vietnamese sentences ending with punctuation
-    pattern = r'(?<=[.!?;])\s+'
-    sentences = re.split(pattern, text)
-    # Further clean and filter empty strings
-    return [s.strip() for s in sentences if s.strip()]
-
 class ProtonxSemanticChunker:
     def __init__(self, threshold=0.3, model="bkai-foundation-models/vietnamese-bi-encoder"):
         self.threshold = threshold
         self.model = SentenceTransformer(model)
         # Download punkt for sentence tokenization, ensuring it's only done when class is initialized
-        try:
-            nltk.download("punkt", quiet=True)
-        except:
-            pass # Suppressed because we'll use simple_tokenize as fallback
+        nltk.download("punkt", quiet=True)
 
     def embed_function(self, sentences):
         """
@@ -35,16 +20,7 @@ class ProtonxSemanticChunker:
         return self.model.encode(sentences)
 
     def split_text(self, text):
-        """
-        Split text into semantic chunks.
-        """
-        try:
-            # Try NLTK first
-            sentences = nltk.sent_tokenize(text)
-        except:
-            # Fall back to simple tokenizer on any error
-            sentences = simple_tokenize(text)
-            
+        sentences = nltk.sent_tokenize(text)  # Extract sentences
         sentences = [item for item in sentences if item and item.strip()]
         if not len(sentences):
             return []
@@ -52,7 +28,7 @@ class ProtonxSemanticChunker:
         # Vectorize the sentences for similarity checking
         vectors = self.embed_function(sentences)
         # Calculate pairwise cosine similarity between sentences
-        similarities = cosine_similarity(vectors)
+        similarities = cosine_similarity(vectors)   
         # Initialize chunks with the first sentence
         chunks = [[sentences[0]]]
         # Group sentences into chunks based on similarity threshold
@@ -184,8 +160,8 @@ def process_markdown_semantic_chunks(
 
 if __name__ == "__main__":
     # Example usage
-    input_file = "src/data/markdown_12f371bf-3fd8-4205-b06e-8346c8f40ad2.json"
-    output_file = "src/data/final_chunks_12f371bf-3fd8-4205-b06e-8346c8f40ad2.json"
+    input_file = "src/data/markdown_9d631398-eae9-4493-8a48-575cb2b92ab0.json"
+    output_file = "src/data/final_chunks_9d631398-eae9-4493-8a48-575cb2b92ab0.json"
     
     try:
         num_chunks = process_markdown_semantic_chunks(

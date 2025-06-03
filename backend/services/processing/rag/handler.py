@@ -13,19 +13,17 @@ import base64
 import json
 import asyncio
 import logging
+import requests
 from typing import Dict, Any, List, Optional, Tuple
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # Gmail API
-import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# Qdrant for vector search
-from backend.db.vector_store import get_vector_store_async
 # Import Vietnamese Query Module
 from backend.services.processing.rag.retrievers.qdrant_retriever import VietnameseQueryModule, create_query_module
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
@@ -47,8 +45,8 @@ class GmailHandler:
             token_path: Path to the token JSON file
             poll_interval: Interval in seconds between inbox checks
         """
-        # Use the provided token.json path directly
-        self.token_path = token_path or "/home/n3bulast0rm/Documents/Projects/DATN/ai-agent/secret/token.json"
+        # Use settings for token path and poll interval if not provided
+        self.token_path = token_path or settings.GMAIL_TOKEN_PATH
         self.service = None
         self.user_id = 'me'  # 'me' refers to the authenticated user
         
@@ -76,10 +74,10 @@ class GmailHandler:
         try:
             # Create embedding module
             embedding_module = VietnameseEmbeddingModule(
-                qdrant_host="localhost",
-                qdrant_port=6333,
-                collection_name="vietnamese_chunks_test",  # Use the correct collection name
-                model_name="bkai-foundation-models/vietnamese-bi-encoder"
+                qdrant_host=settings.QDRANT_HOST,
+                qdrant_port=settings.QDRANT_PORT,
+                collection_name=settings.QDRANT_COLLECTION_NAME,
+                model_name=settings.SEMANTIC_CHUNKER_MODEL
             )
             
             # Create query module
@@ -89,7 +87,7 @@ class GmailHandler:
                 deepseek_model=self.deepseek_model
             )
             
-            logger.info("Vietnamese Query Module initialized successfully")
+            logger.info(f"Vietnamese Query Module initialized successfully with collection: {settings.QDRANT_COLLECTION_NAME}")
             
         except Exception as e:
             logger.error(f"Error initializing Vietnamese Query Module: {e}")
@@ -249,8 +247,8 @@ class GmailHandler:
             logger.error(f"Error marking message as read: {e}")
             raise
             
-            
-    async def call_deepseek_api(self, user_query: str, context: List[Dict[str, Any]]) -> str:
+
+    def call_deepseek_api(self, user_query: str, context: List[Dict[str, Any]]) -> str:
         """
         Call DeepSeek API to generate email response.
         
@@ -264,8 +262,6 @@ class GmailHandler:
         Raises:
             Exception: If calling DeepSeek API fails
         """
-        import httpx
-        
         if not self.deepseek_api_key:
             logger.error("DeepSeek API key not set")
             return "Error: DeepSeek API key not configured"
@@ -288,46 +284,57 @@ class GmailHandler:
             # Prepare prompt for DeepSeek API
             prompt = f"""You are an AI assistant that drafts email responses based on user queries and available information.
             
-User Query: {user_query}
+    User Query: {user_query}
 
-Relevant Information:
-{formatted_context}
+    Relevant Information:
+    {formatted_context}
 
-Please draft a professional email response that addresses the user's query using the relevant information provided. The response should be clear, concise, and formatted as an email.
-"""
+    Please draft a professional email response that addresses the user's query using the relevant information provided. The response should be clear, concise, and formatted as an email.
+    """
             
             # Call DeepSeek API
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self.deepseek_api_url,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {self.deepseek_api_key}"
-                    },
-                    json={
-                        "model": self.deepseek_model,
-                        "messages": [
-                            {"role": "system", "content": "You are a helpful assistant that drafts emails."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.7,
-                        "max_tokens": 4000
-                    },
-                    timeout=30.0
-                )
+            response = requests.post(
+                self.deepseek_api_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.deepseek_api_key}"
+                },
+                json={
+                    "model": self.deepseek_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant that drafts emails."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 4000
+                },
+                timeout=60
+            )
+            
+            # Check response status
+            response.raise_for_status()
+            
+            response_data = response.json()
+            if "choices" in response_data and len(response_data["choices"]) > 0:
+                generated_text = response_data["choices"][0]["message"]["content"]
+                return generated_text
+            else:
+                logger.error(f"Unexpected response format: {response_data}")
+                return "Error: Unexpected response format from DeepSeek API"
                 
-                response_data = response.json()
-                if "choices" in response_data and len(response_data["choices"]) > 0:
-                    generated_text = response_data["choices"][0]["message"]["content"]
-                    return generated_text
-                else:
-                    logger.error(f"Unexpected response format: {response_data}")
-                    return "Error: Unexpected response format from DeepSeek API"
-                    
+        except requests.exceptions.Timeout:
+            logger.error("Timeout calling DeepSeek API")
+            return "Error: Request timeout when generating response"
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error calling DeepSeek API: {e.response.status_code} - {e.response.text}")
+            return f"Error: API returned status {e.response.status_code}"
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error calling DeepSeek API: {e}")
+            return "Error: Network error when calling API"
         except Exception as e:
             logger.error(f"Error calling DeepSeek API: {e}")
             return f"Error generating response: {str(e)}"
-            
+
     def create_draft_email(self, to: str, subject: str, body: str) -> None:
         """
         Create a draft email in Gmail.
@@ -366,7 +373,7 @@ Please draft a professional email response that addresses the user's query using
             logger.error(f"Error creating draft: {e}")
             raise
             
-    async def process_email_with_vietnamese_query_module(self, email_body: str) -> str:
+    def process_email_with_vietnamese_query_module(self, email_body: str) -> str:
         """
         Process email using the Vietnamese Query Module from qdrant_retriever.py
         
@@ -414,7 +421,7 @@ Email nên rõ ràng, súc tích, được định dạng phù hợp và viết 
 """
             
             # Gọi DeepSeek API
-            response_text = await self.call_deepseek_api("Soạn email phản hồi", [
+            response_text = self.call_deepseek_api("Soạn email phản hồi", [
                 {
                     "content": prompt,
                     "metadata": {
@@ -454,7 +461,7 @@ Email nên rõ ràng, súc tích, được định dạng phù hợp và viết 
             logger.info(f"Processing query: {query[:100]}...")
             
             # Process email using Vietnamese Query Module
-            response_text = await self.process_email_with_vietnamese_query_module(query)
+            response_text = self.process_email_with_vietnamese_query_module(query)
             
             # Create draft email
             self.create_draft_email(

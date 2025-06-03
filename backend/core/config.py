@@ -1,8 +1,12 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from typing import Optional
+from typing import Optional, Dict, Any, List
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Get the project root directory
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -17,6 +21,11 @@ class Settings(BaseSettings):
     # Web service settings
     WEB_HOST: str = Field(default="0.0.0.0")
     WEB_PORT: int = Field(default=8000)
+    API_BASE_URL: str = Field(default="http://localhost:8000")
+    
+    # Processing service settings
+    PROCESSING_PORT: int = Field(default=8081, description="Port for the processing service")
+    PROCESSING_HOST: str = Field(default="0.0.0.0", description="Host for the processing service")
     
     # Authentication settings
     ADMIN_USERNAME: str = Field(default="admin")
@@ -53,12 +62,11 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = Field(default=1000)
     CHUNK_OVERLAP: int = Field(default=200)
     PROCESSING_THREADS: int = Field(default=2)
-
-    # Webhook settings
-    WEB_SERVICE_URL: str = Field(default="http://localhost:8000/api/webhook/status-update")
+    SEMANTIC_CHUNKER_THRESHOLD: float = Field(default=0.3)
+    SEMANTIC_CHUNKER_MODEL: str = Field(default="bkai-foundation-models/vietnamese-bi-encoder")
+    QDRANT_BATCH_SIZE: int = Field(default=8)
     
     # Gmail API settings
-    GMAIL_CREDENTIALS_PATH: str = Field(default="secret/credentials.json")
     GMAIL_TOKEN_PATH: str = Field(default="token.json")
     GMAIL_POLL_INTERVAL: int = Field(default=60)  # Seconds
     
@@ -73,7 +81,10 @@ class Settings(BaseSettings):
     # Azure Document Intelligence API settings
     AZURE_DOCUMENT_ENDPOINT: str = Field(default="", description="Azure Document Intelligence endpoint")
     AZURE_DOCUMENT_KEY: str = Field(default="", description="Azure Document Intelligence API key")
-
+    
+    # Storage Limits in MB
+    STORAGE_LIMIT_MB: int = Field(default=1000)
+    
     class Config:
         env_file = os.path.join(BASE_DIR, ".env")
         env_file_encoding = "utf-8"

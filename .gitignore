@@ -26,6 +26,7 @@ wheels/
 # Virtual environment
 .venv.*
 .venv_azure/
+.venv
 env/
 venv/
 ENV/
@@ -56,6 +57,8 @@ temp/
 .pytest_cache/
 .coverage
 htmlcov/
+
+secret/
 
 # Data files
 data/ 

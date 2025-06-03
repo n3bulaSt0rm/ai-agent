@@ -378,7 +378,19 @@
   margin: 0 0 24px 0;
 }
 
-.modal-overlay {
+.files-list .modal-container {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  width: 95%;
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 0;
+  position: relative;
+}
+
+.files-list .modal-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -391,7 +403,7 @@
   z-index: 1000;
 }
 
-.modal-content {
+.files-list .modal-content {
   background-color: white;
   border-radius: 8px;
   width: 100%;
@@ -401,7 +413,7 @@
   overflow-y: auto;
 }
 
-.modal-header {
+.files-list .modal-header {
   padding: 16px 24px;
   border-bottom: 1px solid var(--border-color);
   display: flex;
@@ -409,13 +421,13 @@
   align-items: center;
 }
 
-.modal-header h2 {
+.files-list .modal-header h2 {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
 }
 
-.close-btn {
+.files-list .close-btn {
   background: none;
   border: none;
   font-size: 24px;
@@ -423,11 +435,11 @@
   color: var(--text-light);
 }
 
-.modal-body {
+.files-list .modal-body {
   padding: 24px;
 }
 
-.modal-footer {
+.files-list .modal-footer {
   padding: 16px 24px;
   border-top: 1px solid var(--border-color);
   display: flex;
@@ -617,10 +629,98 @@
 }
 
 .detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
   margin-bottom: 30px;
+}
+
+/* New styles for the improved document detail modal */
+.document-icon-container {
+  display: flex;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.document-type-large {
+  width: 50px;
+  height: 60px;
+  background-color: #EFF6FF;
+  border-radius: 6px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 30px;
+  flex-shrink: 0;
+  margin-right: 16px;
+}
+
+.document-type-large.pdf {
+  background-color: #FEF2F2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 384 512'%3E%3Cpath fill='%23EF4444' d='M320 464C328.8 464 336 456.8 336 448V416H384V448C384 483.3 355.3 512 320 512H64C28.65 512 0 483.3 0 448V416H48V448C48 456.8 55.16 464 64 464H320zM256 160C238.3 160 224 145.7 224 128V48H64C55.16 48 48 55.16 48 64V192H0V64C0 28.65 28.65 0 64 0H229.5C246.5 0 262.7 6.743 274.7 18.75L365.3 109.3C377.3 121.3 384 137.5 384 154.5V192H336V160H256zM88 224C118.9 224 144 249.1 144 280C144 310.9 118.9 336 88 336H80V368H32V224H88zM112 280C112 267.3 101.3 256 88 256H80V304H88C101.3 304 112 292.7 112 280zM160 224H208C229 224 240 238.3 240 256C240 268.9 231.3 280.2 220 283.4C230.7 286.7 240 295.3 240 312C240 330.7 229 352 208 352H160V224zM192 352V320H208C214.1 320 224 316.1 224 312C224 307.9 214.1 304 208 304H192V272H208C214.1 272 224 268.1 224 256C224 251.9 214.1 248 208 248H192V352zM304 224H352V272H328V288H352V320H328V368H304V224z'/%3E%3C/svg%3E");
+}
+
+.document-title-large {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
+  color: #1e293b;
+  word-break: break-word;
+}
+
+.detail-tabs {
+  display: flex;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.detail-tab {
+  padding: 10px 16px;
+  font-weight: 600;
+  color: #64748b;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.detail-tab.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+}
+
+.detail-section {
+  margin-bottom: 8px;
+  padding-bottom: 16px;
+}
+
+.detail-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+  color: #334155;
+}
+
+.detail-description {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: #334155;
+  background: #f8fafc;
+  padding: 16px;
+  border-radius: 6px;
+  border: 1px solid #f1f5f9;
+}
+
+.keyword-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.keyword-edit-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f1f5f9;
 }
 
 .detail-actions {
@@ -630,46 +730,8 @@
   justify-content: flex-end;
 }
 
-.modal-container {
-  background-color: white;
-  border-radius: var(--border-radius);
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-  width: 95%;
-  max-width: 800px;
-  max-height: 90vh;
-  overflow-y: auto;
-  padding: 0;
-  position: relative;
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.modal-header h2 {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 600;
-}
-
-.modal-body {
-  padding: 20px;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 1.5rem;
-  cursor: pointer;
-  color: var(--text-light);
-}
-
 /* Page Range Modal Styles */
-.page-range-row {
+.files-list .page-range-row {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
@@ -680,7 +742,7 @@
   border: 1px solid #e2e8f0;
 }
 
-.range-number {
+.files-list .range-number {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -693,13 +755,13 @@
   font-size: 14px;
 }
 
-.range-inputs {
+.files-list .range-inputs {
   display: flex;
   gap: 16px;
   flex: 1;
 }
 
-.range-inputs label {
+.files-list .range-inputs label {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -707,7 +769,7 @@
   font-size: 15px;
 }
 
-.range-inputs input {
+.files-list .range-inputs input {
   width: 80px;
   padding: 8px 12px;
   border: 1px solid #cbd5e1;
@@ -719,17 +781,17 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.range-inputs input:focus {
+.files-list .range-inputs input:focus {
   outline: none;
   border-color: var(--primary-color);
   box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.2);
 }
 
-.modal-actions {
+.files-list .modal-actions {
   margin-top: 16px;
 }
 
-.error-message {
+.files-list .error-message {
   background-color: #fff1f0;
   color: #cf1322;
   padding: 10px;
@@ -738,7 +800,7 @@
   border: 1px solid #ffa39e;
 }
 
-.btn-icon {
+.files-list .btn-icon {
   background: none;
   border: none;
   color: #94a3b8;
@@ -752,23 +814,23 @@
   transition: all 0.2s;
 }
 
-.btn-icon:hover {
+.files-list .btn-icon:hover {
   color: #ef4444;
   background-color: #fee2e2;
 }
 
-.btn-icon:disabled {
+.files-list .btn-icon:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.document-process-info {
+.files-list .document-process-info {
   margin-bottom: 20px;
   border-bottom: 1px solid #e2e8f0;
   padding-bottom: 16px;
 }
 
-.document-process-info h3 {
+.files-list .document-process-info h3 {
   margin: 0 0 8px 0;
   font-size: 18px;
   font-weight: 600;
@@ -776,29 +838,29 @@
   word-break: break-word;
 }
 
-.document-pages-info {
+.files-list .document-pages-info {
   margin: 0;
   color: #64748b;
   font-size: 14px;
 }
 
-.document-pages-info strong {
+.files-list .document-pages-info strong {
   color: #1e293b;
   font-weight: 600;
 }
 
-.process-instruction {
+.files-list .process-instruction {
   margin-bottom: 20px;
 }
 
-.process-instruction p {
+.files-list .process-instruction p {
   margin: 0;
   font-size: 15px;
   font-weight: 500;
   color: #334155;
 }
 
-.btn-add-range {
+.files-list .btn-add-range {
   display: inline-flex;
   align-items: center;
   background-color: #f1f5f9;
@@ -812,24 +874,54 @@
   transition: all 0.2s;
 }
 
-.btn-add-range:hover {
+.files-list .btn-add-range:hover {
   background-color: #e2e8f0;
   color: #1e293b;
 }
 
-.btn-add-range:disabled {
+.files-list .btn-add-range:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.btn-process {
+.files-list .btn-process {
   display: inline-flex;
   align-items: center;
   font-size: 15px;
   padding: 10px 20px;
 }
 
-.modal-footer {
+/* File creation date edit styles */
+.file-date-section {
+  margin-top: 16px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 16px;
+}
+
+.date-edit-section {
+  margin-top: 8px;
+}
+
+.date-input-group {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.save-date {
+  white-space: nowrap;
+  height: 42px;
+}
+
+.files-list .close-button {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+}
+
+.files-list .modal-footer {
   display: flex;
   justify-content: flex-end;
   padding: 16px 20px;

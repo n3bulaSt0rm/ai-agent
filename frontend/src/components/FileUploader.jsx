@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { ArrowUpTrayIcon } from '@heroicons/react/24/outline';
 import '../styles/FileUploader.css';
+import '../styles/LoadingOverlay.css';
 
 /**
  * Reusable file upload component with custom styling
@@ -20,6 +21,47 @@ const FileUploader = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [fileCreatedAt, setFileCreatedAt] = useState('');
   const [keywords, setKeywords] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Use effect to update parent component when metadata changes
+  useEffect(() => {
+    if (selectedFile) {
+      updateFileMetadata(false);
+    }
+  }, [keywords, fileCreatedAt]);
+
+  // Update metadata and notify parent
+  const updateFileMetadata = (showProcessing = true) => {
+    if (!selectedFile) return;
+    
+    // Show processing indicator only if explicitly requested
+    if (showProcessing) {
+      setIsProcessing(true);
+    }
+    
+    // Clone the file object to avoid modification issues
+    const fileWithMetadata = new File([selectedFile], selectedFile.name, {
+      type: selectedFile.type,
+      lastModified: selectedFile.lastModified
+    });
+    
+    // Add metadata
+    fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
+    fileWithMetadata.keywords = keywords || '';
+    
+    console.log('Updating file with keywords:', keywords);
+        
+    // Update the selected file
+    setSelectedFile(fileWithMetadata);
+    
+    // Notify parent component
+    onFileSelected(fileWithMetadata);
+    
+    // Hide processing indicator if it was shown
+    if (showProcessing) {
+      setTimeout(() => setIsProcessing(false), 500);
+    }
+  };
 
   // Handle click on the custom button
   const handleButtonClick = () => {
@@ -69,10 +111,13 @@ const FileUploader = ({
   const processFile = (file) => {
     if (!file) return;
     
+    setIsProcessing(true);
+    
     // Validate file size
     const fileSizeMB = file.size / (1024 * 1024);
     if (fileSizeMB > maxSize) {
       setErrorMessage(`File size exceeds the ${maxSize}MB limit`);
+      setIsProcessing(false);
       return;
     }
 
@@ -80,35 +125,54 @@ const FileUploader = ({
     const fileExt = '.' + file.name.split('.').pop().toLowerCase();
     if (!acceptedFormats.includes(fileExt)) {
       setErrorMessage(`File type not supported. Accepted formats: ${acceptedFormats.join(', ')}`);
+      setIsProcessing(false);
       return;
     }
 
     // Clear any previous errors
     setErrorMessage('');
-    setSelectedFile(file);
+    
+    // Create a new File object with metadata
+    const fileWithMetadata = new File([file], file.name, {
+      type: file.type,
+      lastModified: file.lastModified
+    });
+    
+    // Add metadata
+    fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
+    fileWithMetadata.keywords = keywords || '';
+    
+    console.log('Setting file with keywords:', keywords);
+    console.log('File size is automatically set:', fileWithMetadata.size);
+    
+    // Update state
+    setSelectedFile(fileWithMetadata);
     
     // Call the callback function
     if (onFileSelected) {
-      // Parse keywords into array
-      const keywordArray = keywords ? keywords.split(',').map(k => k.trim()).filter(k => k) : [];
-      
-      // Add additional metadata to file object
-      file.fileCreatedAt = fileCreatedAt || '';
-      file.keywords = keywordArray;
-      
-      onFileSelected(file);
+      onFileSelected(fileWithMetadata);
     }
+    
+    // Hide processing indicator after a short delay
+    setTimeout(() => setIsProcessing(false), 500);
   };
 
   return (
     <div className="file-uploader-container">
       <div 
-        className={`file-drop-area ${dragActive ? 'drag-active' : ''}`}
+        className={`file-drop-area ${dragActive ? 'drag-active' : ''} ${isProcessing ? 'processing' : ''}`}
         onDragEnter={handleDrag}
         onDragOver={handleDrag}
         onDragLeave={handleDrag}
         onDrop={handleDrop}
       >
+        {isProcessing && (
+          <div className="file-processing-overlay">
+            <div className="processing-spinner"></div>
+            <p>Loading...</p>
+          </div>
+        )}
+      
         {!selectedFile ? (
           <>
             <div className="upload-icon-wrapper">
@@ -168,6 +232,7 @@ const FileUploader = ({
               type="button" 
               className="change-file-btn"
               onClick={handleButtonClick}
+              disabled={isProcessing}
             >
               Change File
             </button>

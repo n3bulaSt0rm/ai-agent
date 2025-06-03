@@ -3,51 +3,15 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import '../styles/FileDetail.css';
 import filesApi from '../services/api';
 import { toast } from 'react-hot-toast';
+import LoadingOverlay from '../components/LoadingOverlay';
+import '../styles/LoadingOverlay.css';
 
 // Import icons
 import TrashIcon from '@heroicons/react/24/outline/TrashIcon';
-
-// Mock data
-const mockDocuments = [
-  { 
-    id: 1, 
-    title: 'Quy chế đào tạo đại học 2024', 
-    size: '2.4 MB', 
-    uploadDate: '2024-07-15', 
-    status: 'processed',
-    pages: 42,
-    type: 'pdf',
-    uploadedBy: 'admin',
-    description: 'Quy chế đào tạo trình độ đại học theo hệ thống tín chỉ của trường Đại học Bách khoa Hà Nội.',
-    sampleContent: [
-      { 
-        page: 1, 
-        text: 'CHƯƠNG I: NHỮNG QUY ĐỊNH CHUNG\n\nĐiều 1. Phạm vi điều chỉnh và đối tượng áp dụng\n1. Quy chế này quy định về đào tạo trình độ đại học theo hệ thống tín chỉ, bao gồm: chương trình đào tạo, tổ chức đào tạo; kiểm tra, thi học phần; xét và công nhận tốt nghiệp.' 
-      },
-      { 
-        page: 2, 
-        text: 'Điều 2. Chương trình đào tạo\n1. Chương trình đào tạo (sau đây gọi tắt là chương trình) cần thể hiện rõ: trình độ đào tạo; đối tượng đào tạo, điều kiện nhập học và điều kiện tốt nghiệp; mục tiêu đào tạo, chuẩn kiến thức, kỹ năng của người học khi tốt nghiệp; khối lượng kiến thức lý thuyết, thực hành, thực tập; kế hoạch đào tạo theo thời gian thiết kế; phương pháp và hình thức đào tạo; cách thức đánh giá kết quả học tập; các điều kiện thực hiện chương trình.'
-      }
-    ]
-  },
-  { 
-    id: 2, 
-    title: 'Quy định về khảo thí và đánh giá kết quả học tập', 
-    size: '1.8 MB', 
-    uploadDate: '2024-07-10', 
-    status: 'processed',
-    pages: 35,
-    type: 'pdf',
-    uploadedBy: 'admin',
-    description: 'Quy định về công tác khảo thí và đánh giá kết quả học tập của sinh viên tại trường Đại học Bách khoa Hà Nội.',
-    sampleContent: [
-      { 
-        page: 1, 
-        text: 'CHƯƠNG I: QUY ĐỊNH CHUNG\n\nĐiều 1. Phạm vi điều chỉnh và đối tượng áp dụng\n1. Văn bản này quy định về công tác khảo thí và đánh giá kết quả học tập của sinh viên trong quá trình đào tạo tại Trường Đại học Bách khoa Hà Nội.' 
-      }
-    ]
-  },
-];
+import ArrowPathIcon from '@heroicons/react/24/outline/ArrowPathIcon';
+import PencilIcon from '@heroicons/react/24/outline/PencilIcon';
+import CheckIcon from '@heroicons/react/24/outline/CheckIcon';
+import CalendarIcon from '@heroicons/react/24/outline/CalendarIcon';
 
 const FileDetail = () => {
   const { id } = useParams();
@@ -59,6 +23,59 @@ const FileDetail = () => {
   const [showProcessModal, setShowProcessModal] = useState(false);
   const [pageRanges, setPageRanges] = useState([{ start: 1, end: 1 }]);
   const [pageRangeError, setPageRangeError] = useState("");
+  const [loadingAction, setLoadingAction] = useState({ isLoading: false, message: '' });
+  
+  // Add state for editing fields
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionInput, setDescriptionInput] = useState('');
+  const [isEditingCreatedDate, setIsEditingCreatedDate] = useState(false);
+  const [createdDateInput, setCreatedDateInput] = useState('');
+  const [keywordsInput, setKeywordsInput] = useState('');
+  
+  // Helper function to format dates in YYYY-MM-DD for input elements
+  const toInputDateFormat = (dateString) => {
+    if (!dateString) return '';
+    
+    // If already in YYYY-MM-DD format, return as is
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return dateString;
+    }
+    
+    // If in DD/MM/YYYY format, convert to YYYY-MM-DD
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) {
+      const [day, month, year] = dateString.split('/');
+      return `${year}-${month}-${day}`;
+    }
+    
+    // Otherwise, try to parse as a date
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return ''; // Return empty if invalid date
+    
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    
+    return `${year}-${month}-${day}`;
+  };
+  
+  // Helper function to format dates in DD/MM/YYYY format
+  const formatDate = (dateString) => {
+    if (!dateString) return '';
+    
+    // If already in YYYY-MM-DD format (for date input), return as is
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return dateString;
+    }
+    
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString; // Return original if invalid date
+    
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    
+    return `${day}/${month}/${year}`;
+  };
   
   useEffect(() => {
     // Fetch document details
@@ -69,6 +86,9 @@ const FileDetail = () => {
         
         if (data) {
           setDocument(data);
+          setDescriptionInput(data.description || '');
+          setCreatedDateInput(data.fileCreatedAt || '');
+          setKeywordsInput(data.keywords ? data.keywords.join(', ') : '');
           
           // If we have pages_processed_range, initialize it
           if (data.pages_processed_range) {
@@ -102,13 +122,93 @@ const FileDetail = () => {
   
   const confirmDelete = async () => {
     try {
+      setLoadingAction({ isLoading: true, message: 'Deleting document...' });
+      setShowDeleteConfirm(false);
+      
       await filesApi.deleteFile(parseInt(id));
       toast.success(`Document moved to trash`);
-      setShowDeleteConfirm(false);
+      
       navigate('/files', { replace: true });
     } catch (error) {
       console.error('Error deleting document:', error);
       toast.error('Failed to delete document');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
+    }
+  };
+  
+  // Add function to update description
+  const handleSaveDescription = async () => {
+    try {
+      setLoadingAction({ isLoading: true, message: 'Updating description...' });
+      
+      await filesApi.updateFileDescription(document.id, descriptionInput);
+      
+      // Update local state
+      setDocument({
+        ...document,
+        description: descriptionInput
+      });
+      
+      setIsEditingDescription(false);
+      toast.success('Description updated successfully');
+      
+    } catch (error) {
+      console.error('Error updating description:', error);
+      toast.error('Failed to update description');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
+    }
+  };
+  
+  // Add function to update file created date
+  const handleSaveCreatedDate = async () => {
+    try {
+      setLoadingAction({ isLoading: true, message: 'Updating file date...' });
+      
+      await filesApi.updateFileCreatedAt(document.id, createdDateInput);
+      
+      // Update local state
+      setDocument({
+        ...document,
+        fileCreatedAt: createdDateInput
+      });
+      
+      setIsEditingCreatedDate(false);
+      toast.success('File creation date updated successfully');
+      
+    } catch (error) {
+      console.error('Error updating file creation date:', error);
+      toast.error('Failed to update file creation date');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
+    }
+  };
+  
+  // Add function to update keywords
+  const handleSaveKeywords = async () => {
+    try {
+      setLoadingAction({ isLoading: true, message: 'Updating keywords...' });
+      
+      await filesApi.updateKeywords(document.id, keywordsInput);
+      
+      // Update local state - parse keywords for display
+      const keywordArray = keywordsInput.split(',')
+        .map(k => k.trim())
+        .filter(k => k);
+      
+      setDocument({
+        ...document,
+        keywords: keywordArray
+      });
+      
+      toast.success('Keywords updated successfully');
+      
+    } catch (error) {
+      console.error('Error updating keywords:', error);
+      toast.error('Failed to update keywords');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
     }
   };
   
@@ -244,9 +344,11 @@ const FileDetail = () => {
         }
       }
       
+      setLoadingAction({ isLoading: true, message: 'Processing document...' });
+      setShowProcessModal(false);
+      
       await filesApi.processFile(document.id, { page_ranges: pageRanges });
       toast.success(`Processing document...`);
-      setShowProcessModal(false);
       
       // Refresh document data
       const updatedDoc = await filesApi.getFile(parseInt(id));
@@ -254,6 +356,8 @@ const FileDetail = () => {
     } catch (error) {
       console.error(`Error processing document: ${error}`);
       toast.error('Failed to process document');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
     }
   };
   
@@ -288,6 +392,11 @@ const FileDetail = () => {
 
   return (
     <div className="page-container file-detail">
+      <LoadingOverlay 
+        isVisible={loadingAction.isLoading}
+        message={loadingAction.message}
+      />
+      
       <header className="page-header">
         <div className="header-back-button">
           <Link to="/files" className="back-button">
@@ -296,49 +405,51 @@ const FileDetail = () => {
           </Link>
         </div>
         <div className="header-actions">
-          <button 
-            className="btn-primary"
-            onClick={handleProcess}
-            disabled={document.status === 'processing'}
-          >
-            <i className="icon process-icon"></i>
-            Process
-          </button>
+          {document && document.status === 'pending_upload' && (
+            <button 
+              className="btn-primary"
+              onClick={handleProcess}
+              disabled={document.status === 'processing'}
+            >
+              <ArrowPathIcon className="w-5 h-5 mr-2" />
+              Process
+            </button>
+          )}
           <button className="btn-secondary">
             <i className="icon download-icon"></i>
             Download
           </button>
           <button className="btn-danger" onClick={handleDelete}>
-            <i className="icon delete-icon"></i>
+            <TrashIcon className="w-5 h-5 mr-2" />
             Delete
           </button>
         </div>
       </header>
       
       <div className="document-hero">
-        <div className="document-icon-large pdf"></div>
+        <div className={`document-type-large ${document?.type || 'pdf'}`}></div>
         <div className="document-hero-content">
-          <h1>{document.title}</h1>
+          <h1>{document?.title}</h1>
           <div className="document-meta">
             <span className="meta-item">
               <i className="icon file-icon"></i>
-              {document.size}
+              {document?.size}
             </span>
             <span className="meta-item">
               <i className="icon pages-icon"></i>
-              {document.pages} pages
+              {document?.pages} pages
             </span>
             <span className="meta-item">
               <i className="icon calendar-icon"></i>
-              Uploaded on {document.uploadAt}
+              Uploaded on {document?.uploadAt}
             </span>
             <span className="meta-item">
               <i className="icon user-icon"></i>
-              by {document.uploadedBy}
+              by {document?.uploadedBy}
             </span>
-            <span className={`status-badge ${document.status}`}>
-              {document.status === 'processed' ? 'Processed' : 
-               document.status === 'processing' ? 'Processing' : 'Pending'}
+            <span className={`status-badge ${document?.status}`}>
+              {document?.status === 'processed' ? 'Processed' : 
+               document?.status === 'processing' ? 'Processing' : 'Pending'}
             </span>
           </div>
         </div>
@@ -369,8 +480,55 @@ const FileDetail = () => {
         {activeTab === 'overview' && (
           <div className="tab-pane overview-tab">
             <div className="document-card">
-              <h2>Document Information</h2>
-              <p className="document-description">{document.description}</p>
+              <div className="card-header">
+                <h2>Document Information</h2>
+              </div>
+              
+              {isEditingDescription ? (
+                <div className="edit-description">
+                  <textarea
+                    value={descriptionInput}
+                    onChange={(e) => setDescriptionInput(e.target.value)}
+                    className="description-textarea"
+                    rows={4}
+                    placeholder="Enter document description..."
+                  />
+                  <div className="edit-actions">
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => {
+                        setIsEditingDescription(false);
+                        setDescriptionInput(document.description || '');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn-primary btn-sm"
+                      onClick={handleSaveDescription}
+                    >
+                      <CheckIcon className="w-4 h-4 mr-1" />
+                      Save
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="description-section">
+                  <div className="description-header">
+                    <h3>Description</h3>
+                    <button
+                      className="btn-icon"
+                      onClick={() => setIsEditingDescription(true)}
+                      title="Edit description"
+                    >
+                      <PencilIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <p className="document-description">
+                    {document.description || "No description available"}
+                  </p>
+                </div>
+              )}
               
               <div className="document-details">
                 <div className="detail-row">
@@ -391,16 +549,105 @@ const FileDetail = () => {
                 </div>
                 <div className="detail-row">
                   <div className="detail-label">Upload date</div>
-                  <div className="detail-value">{document.uploadAt}</div>
+                  <div className="detail-value">{formatDate(document.uploadAt)}</div>
                 </div>
+                
                 <div className="detail-row">
-                  <div className="detail-label">Keywords</div>
-                  <div className="detail-value">
-                    {document.keywords && document.keywords.length > 0
-                      ? document.keywords.join(", ")
-                      : "No keywords"}
+                  <div className="detail-label">Created date</div>
+                  <div className="detail-value-group">
+                    <div className="detail-value">{formatDate(document.fileCreatedAt)}</div>
+                    <button
+                      className="btn-icon"
+                      onClick={() => setIsEditingCreatedDate(true)}
+                      title="Edit creation date"
+                    >
+                      <PencilIcon className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
+                
+                {isEditingCreatedDate && (
+                  <div className="edit-date">
+                    <div className="date-input-group">
+                      <input
+                        type="date"
+                        value={toInputDateFormat(createdDateInput)}
+                        onChange={(e) => setCreatedDateInput(e.target.value)}
+                        className="date-input"
+                      />
+                      <div className="edit-actions">
+                        <button
+                          className="btn-secondary btn-sm"
+                          onClick={() => {
+                            setIsEditingCreatedDate(false);
+                            setCreatedDateInput(document.fileCreatedAt || '');
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="btn-primary btn-sm"
+                          onClick={handleSaveCreatedDate}
+                        >
+                          <CalendarIcon className="w-4 h-4 mr-1" />
+                          Update Date
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="detail-row">
+                  <div className="detail-label">Keywords</div>
+                  <div className="detail-value keywords-container">
+                    <div className="keyword-tags">
+                      {document.keywords && document.keywords.length > 0
+                        ? document.keywords.map((keyword, index) => (
+                            <span key={index} className="keyword-tag">{keyword}</span>
+                          ))
+                        : "No keywords"}
+                    </div>
+                    <button
+                      className="btn-icon"
+                      onClick={() => document.querySelector('#keywordsEdit').classList.toggle('show')}
+                      title="Edit keywords"
+                    >
+                      <PencilIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                
+                <div id="keywordsEdit" className="keywords-edit">
+                  <input
+                    type="text"
+                    value={keywordsInput}
+                    onChange={(e) => setKeywordsInput(e.target.value)}
+                    placeholder="Enter keywords separated by commas"
+                    className="keywords-input"
+                  />
+                  <div className="edit-actions">
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => {
+                        document.querySelector('#keywordsEdit').classList.remove('show');
+                        setKeywordsInput(document.keywords ? document.keywords.join(', ') : '');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn-primary btn-sm"
+                      onClick={() => {
+                        handleSaveKeywords();
+                        document.querySelector('#keywordsEdit').classList.remove('show');
+                      }}
+                    >
+                      <CheckIcon className="w-4 h-4 mr-1" />
+                      Save Keywords
+                    </button>
+                  </div>
+                </div>
+                
                 <div className="detail-row">
                   <div className="detail-label">Status</div>
                   <div className="detail-value">

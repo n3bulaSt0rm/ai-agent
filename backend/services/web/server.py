@@ -7,9 +7,10 @@ import os
 import logging
 import time
 from datetime import datetime
+import json
 
 from backend.core.config import settings
-from backend.services.web.api import auth, files, query
+from backend.services.web.api import auth, files
 from backend.db.metadata import get_metadata_db
 
 # Configure logging
@@ -42,22 +43,21 @@ async def add_timing_header(request: Request, call_next):
     """Add timing information to response headers"""
     start_time = time.time()
     
-    # Print request information for debugging
-    print(f"Request: {request.method} {request.url.path}?{request.url.query}")
+    # Log request information consistently for all requests
+    logger.info(f"Request: {request.method} {request.url.path}?{request.url.query}")
     
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000
     response.headers["X-Process-Time-Ms"] = str(int(process_time))
     
-    # Print response status for debugging
-    print(f"Response: {response.status_code}")
+    # Log response status for all requests
+    logger.info(f"Response: {response.status_code}")
     
     return response
 
 # Include API routers
 app.include_router(auth.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
-app.include_router(query.router, prefix="/api")
 
 # Static files and templates setup
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -144,7 +144,9 @@ async def admin_ui(request: Request):
 async def status_update_webhook(request: Request):
     """
     Webhook for receiving status updates from the processing service.
-    Simplified to only use file_id (UUID) and status.
+    Supports:
+    - Updating file status
+    - Adding processed page_range to pages_processed_range
     """
     try:
         data = await request.json()
@@ -154,22 +156,65 @@ async def status_update_webhook(request: Request):
         
         file_id = data.get("file_id")  # This is the UUID
         status = data.get("status")
+        page_range = data.get("page_range")  # Optional field
         
         # Log the webhook request
-        logger.info(f"Received webhook update for file {file_id}: status={status}")
+        if page_range:
+            logger.info(f"Received webhook update for file {file_id}: status={status}, page_range={page_range}")
+        else:
+            logger.info(f"Received webhook update for file {file_id}: status={status}")
         
         # Get the metadata DB
         db = get_metadata_db()
         
-        # Update status in database by UUID
-        result = db.update_pdf_status_by_uuid(file_id, status)
-        
-        if not result:
-            logger.error(f"Failed to update status for file {file_id}")
+        # First, get the current file info to check page_range
+        file_info = db.get_pdf_file_by_uuid(file_id)
+        if not file_info:
+            logger.error(f"File {file_id} not found")
             raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+        
+        # If page_range is provided, update the pages_processed_range
+        if page_range and status == "processed":
+            # Get current processed ranges
+            current_ranges = []
+            if file_info.get("pages_processed_range"):
+                try:
+                    current_ranges = json.loads(file_info["pages_processed_range"])
+                    if not isinstance(current_ranges, list):
+                        current_ranges = []
+                except:
+                    current_ranges = []
             
-        logger.info(f"Successfully updated file {file_id} status to {status}")
-        return {"message": f"File {file_id} status updated to {status}"}
+            # Check if page_range already exists
+            if page_range not in current_ranges:
+                # Add the new page_range
+                new_processed_ranges = current_ranges + [page_range]
+                
+                # Update pages_processed_range
+                result = db.update_pdf_status_by_uuid(
+                    file_id, 
+                    file_info["status"],  # Keep current status
+                    pages_processed_range=json.dumps(new_processed_ranges)
+                )
+                
+                if not result:
+                    logger.error(f"Failed to update pages_processed_range for file {file_id}")
+                    raise HTTPException(status_code=500, detail=f"Failed to update pages_processed_range for file {file_id}")
+                
+                logger.info(f"Added page range {page_range} to file {file_id}, total ranges: {len(new_processed_ranges)}")
+        
+        # Always update status if it's different from current
+        if status != file_info["status"]:
+            # Update status in database by UUID
+            result = db.update_pdf_status_by_uuid(file_id, status)
+            
+            if not result:
+                logger.error(f"Failed to update status for file {file_id}")
+                raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+                
+            logger.info(f"Successfully updated file {file_id} status to {status}")
+        
+        return {"message": f"File {file_id} updated successfully"}
     except HTTPException:
         raise
     except Exception as e:

@@ -26,7 +26,9 @@ def start_web_service():
             "backend.services.web.server:app",
             host=settings.WEB_HOST,
             port=settings.WEB_PORT,
-            reload=True
+            reload=True,
+            log_level="info",  # Make sure logging level is set to info
+            access_log=True    # Ensure access logs are enabled
         )
     else:
         # Trong production, có thể sử dụng app object trực tiếp
@@ -35,7 +37,9 @@ def start_web_service():
             app,
             host=settings.WEB_HOST,
             port=settings.WEB_PORT,
-            reload=False
+            reload=False,
+            log_level="info",  # Make sure logging level is set to info
+            access_log=True    # Ensure access logs are enabled
         )
 
 if __name__ == "__main__":

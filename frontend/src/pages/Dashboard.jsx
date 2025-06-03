@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import '../styles/Dashboard.css';
 import ArrowUpTrayIcon from '@heroicons/react/24/outline/ArrowUpTrayIcon';
 import FileUploader from '../components/FileUploader';
@@ -14,12 +14,47 @@ const Dashboard = () => {
     pending: 0,
     processing: 0,
     processed: 0,
-    trash: 0
+    trash: 0,
+    storage: {
+      used_mb: 0,
+      limit_mb: 1000,
+      percentage: 0
+    }
   });
   const [processedFiles, setProcessedFiles] = useState([]);
   const [processingFiles, setProcessingFiles] = useState([]);
   const [deletedFiles, setDeletedFiles] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [serviceHealth, setServiceHealth] = useState({
+    status: 'loading',
+    timestamp: null,
+    message: 'Checking system health...'
+  });
+  
+  // Health check interval reference
+  const healthCheckIntervalRef = useRef(null);
+  
+  // Function to check service health
+  const checkServiceHealth = async () => {
+    try {
+      const healthStatus = await filesApi.getProcessingServiceHealth();
+      setServiceHealth({
+        status: healthStatus.status || 'unknown',
+        timestamp: healthStatus.timestamp || new Date().toISOString(),
+        message: healthStatus.message || 'System health check completed'
+      });
+      
+      // Add a console log to show the health check result
+      console.log("Processing service health status:", healthStatus);
+    } catch (error) {
+      console.error('Health check failed:', error);
+      setServiceHealth({
+        status: 'error',
+        timestamp: new Date().toISOString(),
+        message: 'Failed to check system health'
+      });
+    }
+  };
   
   // Đảm bảo rằng chỉ hiển thị dữ liệu trên client để tránh hydration mismatch
   useEffect(() => {
@@ -29,6 +64,12 @@ const Dashboard = () => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
+        
+        // Check service health immediately on load
+        await checkServiceHealth();
+        
+        // Start health check interval (every 60 seconds)
+        healthCheckIntervalRef.current = setInterval(checkServiceHealth, 60000);
         
         // Fetch statistics
         const stats = await filesApi.getFileStats();
@@ -55,6 +96,13 @@ const Dashboard = () => {
     };
     
     fetchDashboardData();
+    
+    // Cleanup interval on component unmount
+    return () => {
+      if (healthCheckIntervalRef.current) {
+        clearInterval(healthCheckIntervalRef.current);
+      }
+    };
   }, []);
   
   // Helper function to format dates in DD/MM/YYYY format
@@ -76,9 +124,23 @@ const Dashboard = () => {
   };
   
   const handleUpload = async () => {
-    if (!selectedFile) return;
+    if (!selectedFile) {
+      console.error('No file selected for upload');
+      toast.error('Please select a file to upload');
+      return;
+    }
     
     try {
+      console.log('Dashboard - Uploading file:', selectedFile.name);
+      console.log('Dashboard - File object type:', selectedFile instanceof File ? 'File object' : typeof selectedFile);
+      console.log('Dashboard - File metadata:', {
+        name: selectedFile.name,
+        size: selectedFile.size,
+        type: selectedFile.type,
+        createdAt: selectedFile.fileCreatedAt,
+        keywords: selectedFile.keywords
+      });
+      
       const response = await filesApi.uploadFile(
         selectedFile,
         selectedFile.description || '',
@@ -97,7 +159,7 @@ const Dashboard = () => {
       setSelectedFile(null);
     } catch (error) {
       console.error('Error uploading file:', error);
-      toast.error('Failed to upload file');
+      toast.error('Failed to upload file: ' + (error.message || 'Unknown error'));
     }
   };
   
@@ -146,7 +208,7 @@ const Dashboard = () => {
           
           <div className="service-row">
             <div className="card service-status">
-              <h2 className="no-underline">Service Status</h2>
+              <h2 className="no-underline">AI Agent Status</h2>
               <div className="status-list">
                 <div className="status-item">
                     <div className="status-icon">
@@ -154,10 +216,19 @@ const Dashboard = () => {
                   </div>
                   <div className="status-info">
                     <span className="status-label">System Health</span>
-                    <div className="status-value online">
+                    <div className={`status-value ${serviceHealth.status === 'online' ? 'online' : 
+                                                   serviceHealth.status === 'degraded' ? 'degraded' : 
+                                                   serviceHealth.status === 'offline' ? 'offline' : 
+                                                   'unknown'}`}>
                       <span className="status-dot"></span>
-                      Ready
+                      {serviceHealth.status === 'online' ? 'Ready' : 
+                       serviceHealth.status === 'degraded' ? 'Degraded' : 
+                       serviceHealth.status === 'offline' ? 'Offline' : 
+                       serviceHealth.status === 'loading' ? 'Checking...' : 'Unknown'}
                     </div>
+                    {serviceHealth.status !== 'online' && serviceHealth.message && (
+                      <div className="status-message">{serviceHealth.message}</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -167,11 +238,11 @@ const Dashboard = () => {
               <h2 className="no-underline">AWS Cloud Storage Usage</h2>
               <div className="storage-usage">
                 <div className="progress-container">
-                  <div className="progress-bar" style={{ width: '42%' }}></div>
+                  <div className="progress-bar" style={{ width: `${fileStats.storage?.percentage || 0}%` }}></div>
                 </div>
                 <div className="storage-info">
-                  <span>8.4 GB / 20 GB Used</span>
-                  <span>42%</span>
+                  <span>{fileStats.storage?.used_mb || 0} MB / {fileStats.storage?.limit_mb || 1000} MB Used</span>
+                  <span>{fileStats.storage?.percentage || 0}%</span>
                 </div>
               </div>
             </div>
@@ -244,8 +315,8 @@ const Dashboard = () => {
                             </span>
                           </div>
                         </div>
-                        <div className="processing-indicator">
-                          <div className="processing-spinner"></div>
+                        <div className="processing-badge">
+                          <i className="processing-icon-circle"></i>
                         </div>
                       </div>
                     ))

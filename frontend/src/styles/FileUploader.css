@@ -15,11 +15,47 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 1rem;
+  position: relative;
 }
 
 .file-drop-area.drag-active {
   border-color: var(--primary-color);
   background-color: rgba(var(--primary-rgb), 0.05);
+}
+
+.file-processing-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.9);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  border-radius: var(--border-radius);
+}
+
+.processing-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(79, 70, 229, 0.2);
+  border-top-color: #4F46E5;
+  border-radius: 50%;
+  animation: spin 1.5s linear infinite;
+  margin-bottom: 1rem;
+}
+
+@keyframes spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.file-drop-area.processing {
+  opacity: 0.7;
 }
 
 .upload-icon-wrapper {

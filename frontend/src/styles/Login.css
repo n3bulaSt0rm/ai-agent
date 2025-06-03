@@ -214,7 +214,7 @@ html, body {
 form {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.25rem;
 }
 
 .form-group {
@@ -224,7 +224,7 @@ form {
 }
 
 .field-label {
-  color: white;
+  color: white !important;
   display: block;
   margin-bottom: 0.5rem;
   font-size: 0.95rem;

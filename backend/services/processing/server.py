@@ -11,12 +11,16 @@ import os
 import sys
 import time
 import uuid
+import requests
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime
 
 # Third-party imports
-import httpx
-from aiohttp import web
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # Configure logging before other imports
 logging.basicConfig(
@@ -27,8 +31,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Local imports
-from backend.services.messaging import create_subscription, publish_message
 from backend.core.config import settings
+from backend.services.messaging import create_subscription, publish_message
 from backend.services.processing.rag.handler import start_monitoring_async
 from backend.services.processing.rag.extractors.azure.main import process_document as azure_process_document
 from backend.services.processing.rag.extractors.azure.summary_table import process_file
@@ -41,44 +45,90 @@ from backend.services.processing.rag.common.qdrant import ChunkData
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# Configuration
-SEMANTIC_CHUNKER_THRESHOLD = 0.3
-SEMANTIC_CHUNKER_MODEL = "bkai-foundation-models/vietnamese-bi-encoder"
-QDRANT_BATCH_SIZE = 8
+# Get configuration from settings
+PROCESSING_PORT = settings.PROCESSING_PORT
+PROCESSING_HOST = settings.PROCESSING_HOST
+SEMANTIC_CHUNKER_THRESHOLD = settings.SEMANTIC_CHUNKER_THRESHOLD
+SEMANTIC_CHUNKER_MODEL = settings.SEMANTIC_CHUNKER_MODEL
+QDRANT_BATCH_SIZE = settings.QDRANT_BATCH_SIZE
 
-# Set Processing Service port
-PROCESSING_PORT = 8081
+# Create FastAPI app
+app = FastAPI(
+    title="Document Processing Service",
+    description="Service for processing PDF documents and extracting semantic information",
+    version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Health check endpoint with detailed response
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "message": "Service is running normally",
+        "timestamp": datetime.now().isoformat()
+    }
+
+# Root endpoint
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {"message": "Processing Service Running"}
 
 
-async def send_status_update(file_id: str, status: str) -> bool:
+def send_status_update(file_id: str, status: str, webhook_url: str = None, page_range: str = None) -> bool:
     """
     Send status update to web service via webhook.
     
     Args:
         file_id: UUID of the file
         status: Status value to set
+        webhook_url: URL to send the webhook to (if None, construct from API_BASE_URL)
+        page_range: Optional page range that was processed
     
     Returns:
         bool: True if status update was successful, False otherwise
     """
-    webhook_url = settings.WEB_SERVICE_URL
-    logger.info(f"Sending status update: file_id={file_id}, status={status}")
+    # Use provided webhook_url or construct from API_BASE_URL
+    if webhook_url is None:
+        webhook_url = f"{settings.API_BASE_URL}/api/webhook/status-update"
     
+    # Prepare data to be sent
     data = {"file_id": file_id, "status": status}
     
+    # Add page_range if provided
+    if page_range:
+        data["page_range"] = page_range
+        logger.info(f"Sending status update with page_range: file_id={file_id}, status={status}, page_range={page_range}")
+    else:
+        logger.info(f"Sending status update: file_id={file_id}, status={status}")
+    
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(webhook_url, json=data)
-            if response.status_code == 200:
-                logger.info(f"Status update successful: {response.text}")
-                return True
-            else:
-                logger.error(f"Status update failed: {response.status_code} - {response.text}")
-                return False
+        response = requests.post(webhook_url, json=data, timeout=30)
+        if response.status_code == 200:
+            logger.info(f"Status update successful: {response.text}")
+            return True
+        else:
+            logger.error(f"Status update failed: {response.status_code} - {response.text}")
+            return False
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout during status update for file_id: {file_id}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error during status update: {e}")
+        return False
     except Exception as e:
         logger.error(f"Exception during status update: {e}")
         return False
-
 
 async def extract_text(file_path: str, page_range: Optional[str] = None) -> str:
     """
@@ -257,7 +307,6 @@ async def embed_and_store_chunks(
     logger.info(f"Stored {len(chunk_objects)} embeddings in Qdrant")
     return len(chunk_objects)
 
-
 async def process_document(message_data: Dict[str, Any]) -> None:
     """
     Process a document through the entire RAG pipeline:
@@ -275,33 +324,23 @@ async def process_document(message_data: Dict[str, Any]) -> None:
     page_range = message_data.get("page_range")
     file_created_at = message_data.get("file_created_at")
     keywords = message_data.get("keywords", [])
-    
+    webhook_url = message_data.get("webhook_url")
+
     if not file_id or not file_path:
         logger.error("Missing file_id or file_path in message data")
         return
     
     logger.info(f"Started processing document: {file_id} at {file_path}")
     
-    # Update status to processing
-    # await send_status_update(file_id, "processing")
-    
-    page_range_str = None
-    if page_range:
-        if isinstance(page_range, dict) and 'start' in page_range and 'end' in page_range:
-            page_range_str = f"{page_range['start']}-{page_range['end']}"
-            logger.info(f"Converting page range from {page_range} to string format: {page_range_str}")
-        elif isinstance(page_range, str):
-            page_range_str = page_range
-        else:
-            logger.warning(f"Unexpected page_range format: {type(page_range)} - {page_range}")
-    
+    send_status_update(file_id, "processing", webhook_url)
+
     try:
         # Generate a processing ID for tracing
         processing_id = str(uuid.uuid4())
         logger.info(f"Processing ID: {processing_id}")
         
         # Step 1: Extract text from document
-        markdown_content = await extract_text(file_path, page_range_str)
+        markdown_content = await extract_text(file_path, page_range)
         
         # Step 2: Process tables
         markdown_content = await process_tables(markdown_content)
@@ -318,15 +357,14 @@ async def process_document(message_data: Dict[str, Any]) -> None:
         # Step 6: Embed and store chunks
         await embed_and_store_chunks(chunk_objects, file_id, file_created_at, keywords)
         
-        # Update status to processed
-        await send_status_update(file_id, "processed")
+        # Update status to processed (sync call)
+        send_status_update(file_id, "processed", webhook_url, page_range)
         logger.info(f"Completed processing document: {file_id}")
         
     except Exception as e:
         logger.error(f"Error processing document: {str(e)}", exc_info=True)
-        # Update status to error
-        await send_status_update(file_id, "error")
-
+        # Update status to error (sync call)
+        send_status_update(file_id, "error", webhook_url, page_range)
 
 async def mark_document_deleted(message_data: Dict[str, Any]) -> None:
     """
@@ -338,6 +376,7 @@ async def mark_document_deleted(message_data: Dict[str, Any]) -> None:
     """
     file_id = message_data.get("file_id")
     is_deleted = message_data.get("is_deleted", True)
+    webhook_url = message_data.get("webhook_url")
     
     if not file_id:
         logger.error("Missing file_id in mark_deleted message")
@@ -357,16 +396,15 @@ async def mark_document_deleted(message_data: Dict[str, Any]) -> None:
         qdrant_manager = embedding_module.qdrant_manager
         qdrant_manager.update_is_deleted_flag(file_id, is_deleted)
         
-        # Update status based on deletion status
+        # Update status based on deletion status (sync call)
         new_status = "deleted" if is_deleted else "processed"
-        await send_status_update(file_id, new_status)
+        send_status_update(file_id, new_status, webhook_url)
         
         logger.info(f"Successfully marked document {file_id} as {new_status}")
     
     except Exception as e:
         logger.error(f"Error marking document as deleted: {str(e)}", exc_info=True)
-        await send_status_update(file_id, "error")
-
+        send_status_update(file_id, "error", webhook_url)
 
 async def handle_processing_message(message_data: Dict[str, Any]) -> None:
     """
@@ -402,54 +440,45 @@ async def handle_processing_message(message_data: Dict[str, Any]) -> None:
         logger.error(f"Error processing message: {e}", exc_info=True)
 
 
-async def main() -> None:
-    """Main entry point for the processing service."""
+async def startup():
+    """Startup event for the FastAPI application"""
     logger.info("Starting processing service...")
     
+    # Set log level from settings
+    log_level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+    logger.setLevel(log_level)
+    
+    # Create subscription to the processing topic
+    await create_subscription(
+        settings.PDF_PROCESSING_TOPIC,
+        "pdf-processing-subscription",
+        handle_processing_message
+    )
+    
+    logger.info(f"Listening for messages on topic: {settings.PDF_PROCESSING_TOPIC}")
+    
+    # Start the Gmail monitoring service
     try:
-        # Create a simple web app
-        app = web.Application()
-        
-        # Add routes for health checks
-        app.router.add_get("/", lambda request: web.Response(text="Processing Service Running"))
-        app.router.add_get("/health", lambda request: web.Response(text="OK"))
-        
-        # Create subscription to the processing topic
-        await create_subscription(
-            settings.PDF_PROCESSING_TOPIC,
-            "pdf-processing-subscription",
-            handle_processing_message
-        )
-        
-        logger.info(f"Listening for messages on topic: {settings.PDF_PROCESSING_TOPIC}")
-        
-        # Start the Gmail monitoring service
-        try:
-            logger.info("Starting Gmail monitoring service...")
-            gmail_task = await start_monitoring_async()
-            logger.info("Gmail monitoring service started successfully")
-        except Exception as e:
-            logger.error(f"Failed to start Gmail monitoring service: {e}", exc_info=True)
-            # Continue with the processing service even if Gmail monitoring fails
-        
-        # Start web server
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', PROCESSING_PORT)
-        await site.start()
-        
-        logger.info(f"Processing service web server running on port {PROCESSING_PORT}")
-        
-        # Keep the service running
-        while True:
-            await asyncio.sleep(1)
-            
-    except KeyboardInterrupt:
-        logger.info("Shutting down processing service...")
+        logger.info("Starting Gmail monitoring service...")
+        await start_monitoring_async()
+        logger.info("Gmail monitoring service started successfully")
     except Exception as e:
-        logger.error(f"Error in main service loop: {e}", exc_info=True)
-        raise
+        logger.error(f"Failed to start Gmail monitoring service: {e}", exc_info=True)
+        # Continue with the processing service even if Gmail monitoring fails
+
+# Register startup event
+@app.on_event("startup")
+async def on_startup():
+    """Run startup tasks in a background task"""
+    # We need to run the startup in a background task to avoid blocking the main thread
+    asyncio.create_task(startup())
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    # Run FastAPI app with uvicorn
+    uvicorn.run(
+        "backend.services.processing.server:app", 
+        host=PROCESSING_HOST,
+        port=PROCESSING_PORT,
+        reload=False
+    ) 

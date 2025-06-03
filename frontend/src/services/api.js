@@ -57,6 +57,14 @@ const filesApi = {
   // Upload a new file
   uploadFile: async (file, description, fileCreatedAt = null, keywords = null) => {
     try {
+      // Verify that file is valid before proceeding
+      if (!file || !(file instanceof File)) {
+        console.error('Invalid file object:', file);
+        throw new Error('Invalid file object provided for upload');
+      }
+      
+      console.log('API uploadFile - Starting upload for file:', file.name, 'size:', file.size);
+      
       const formData = new FormData();
       formData.append('file', file);
       formData.append('description', description || '');
@@ -65,9 +73,16 @@ const filesApi = {
         formData.append('file_created_at', fileCreatedAt);
       }
       
-      if (keywords && keywords.length > 0) {
-        // Send keywords as a comma-separated string
-        formData.append('keywords', keywords.join(','));
+      // Pastikan keywords selalu dikirim, bahkan jika kosong
+      // Dan pastikan nilai yang kita teruskan adalah string
+      const keywordsStr = keywords ? keywords.toString() : '';
+      console.log('API uploadFile - Adding keywords to form:', keywordsStr);
+      formData.append('keywords', keywordsStr);
+      
+      // Log semua nilai form untuk debugging
+      console.log('API uploadFile - FormData contents:');
+      for (let pair of formData.entries()) {
+        console.log(pair[0] + ': ' + (pair[0] === 'file' ? `[File: ${pair[1].name}, size: ${pair[1].size}, type: ${pair[1].type}]` : pair[1]));
       }
       
       const response = await apiClient.post('/files/upload', formData, {
@@ -76,9 +91,14 @@ const filesApi = {
         },
       });
       
+      console.log('API uploadFile - Response received:', response.status);
+      console.log('API uploadFile - Response keywords:', response.data.keywords);
       return response.data;
     } catch (error) {
       console.error('Error uploading file:', error);
+      if (error.response) {
+        console.error('Server response:', error.response.status, error.response.data);
+      }
       throw error;
     }
   },
@@ -88,7 +108,8 @@ const filesApi = {
     try {
       let response;
       if (options && options.page_ranges) {
-        // Send with page ranges
+        // Log và gửi options giống hệt như vậy
+        console.log("Sending process file request with options:", JSON.stringify(options));
         response = await apiClient.post(`/files/${fileId}/process`, options);
       } else {
         // Backward compatibility for calls without page ranges
@@ -97,6 +118,9 @@ const filesApi = {
       return response.data;
     } catch (error) {
       console.error(`Error processing file ${fileId}:`, error);
+      if (error.response) {
+        console.error('Error response data:', error.response.data);
+      }
       throw error;
     }
   },
@@ -117,11 +141,9 @@ const filesApi = {
     try {
       console.log("Updating keywords for file", fileId, "with:", keywords);
       
-      // Check if keywords is an array and convert to string if needed
-      const keywordsData = Array.isArray(keywords) ? keywords.join(',') : keywords;
-      
+      // Send keywords as they are without conversion
       const response = await apiClient.put(`/files/update/${fileId}`, {
-        keywords: keywordsData
+        keywords: keywords
       });
       return response.data;
     } catch (error) {
@@ -232,6 +254,65 @@ const filesApi = {
     } catch (error) {
       console.error(`Error sorting files by ${sortBy}:`, error);
       throw error;
+    }
+  },
+  
+  // Add updateFileCreatedAt method to the API service
+  updateFileCreatedAt: async (fileId, fileCreatedAt) => {
+    try {
+      const response = await apiClient.put(`/files/update/${fileId}`, {
+        file_created_at: fileCreatedAt
+      });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+  
+  // Add updateFileDescription method to the API service
+  updateFileDescription: async (fileId, description) => {
+    try {
+      const response = await apiClient.put(`/files/update/${fileId}`, {
+        description: description
+      });
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // Get processing service health status
+  getProcessingServiceHealth: async () => {
+    try {
+      // Call directly to the processing service
+      const processingServiceUrl = "http://localhost:8081/health";
+      console.log("Checking processing service health at:", processingServiceUrl);
+      
+      const response = await axios.get(processingServiceUrl, { timeout: 5000 });
+      console.log("Health check response:", response.data);
+      
+      // Process the JSON response from the health endpoint
+      if (response.status === 200 && response.data) {
+        return {
+          status: response.data.status || "online",
+          message: response.data.message || "Service is running normally",
+          timestamp: response.data.timestamp || new Date().toISOString()
+        };
+      } else {
+        return {
+          status: "degraded",
+          message: `Unexpected response: ${response.status}`,
+          timestamp: new Date().toISOString()
+        };
+      }
+    } catch (error) {
+      console.error('Error fetching health status:', error);
+      console.error('Error details:', error.response?.data || 'No response data');
+      return {
+        status: "offline",
+        message: error.message || "Failed to connect to processing service",
+        timestamp: new Date().toISOString()
+      };
     }
   }
 };
