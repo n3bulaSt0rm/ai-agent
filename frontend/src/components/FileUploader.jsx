@@ -214,7 +214,8 @@ const FileUploader = ({
                 />
               </div>
               
-              <div className="form-group">
+              {/* Keywords input hidden but kept in the DOM */}
+              <div className="form-group" style={{ display: 'none' }}>
                 <label htmlFor="keywords">Keywords (comma separated):</label>
                 <input 
                   type="text" 

@@ -26,7 +26,7 @@ def start_processing_service():
             "backend.services.processing.server:app",
             host=settings.PROCESSING_HOST,
             port=settings.PROCESSING_PORT,
-            reload=True
+            reload=False
         )
     except Exception as e:
         logger.error(f"Error running uvicorn: {e}")

@@ -11,6 +11,8 @@ huggingface_hub>=0.23.0
 azure-ai-documentintelligence
 langchain-core>=0.1.20
 langchain-deepseek
+langchain_qdrant
+langchain_core.memory
 langchain-community>=0.0.20
 langchain-text-splitters>=0.0.1
 python-dotenv>=1.0.0
@@ -37,6 +39,10 @@ PyPDF2
 uvicorn
 requests
 langdetect
+sentencepiece
+fastembed
+ninja
+
 
 google-auth
 google-api-python-client

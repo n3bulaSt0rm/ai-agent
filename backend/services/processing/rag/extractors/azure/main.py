@@ -127,19 +127,10 @@ def process_document(pdf_url, page_range=None):
         # Return content directly instead of file path
         return content_without_footnotes
     
-    except HttpResponseError as error:
-        print(f"Error from Azure Document Intelligence: {error.message}")
+    except Exception as error:
+        # Handle Azure-specific errors
+        if hasattr(error, 'message'):
+            logger.error(f"Error from Azure Document Intelligence: {error.message}")
+        else:
+            logger.error(f"Error processing document: {str(error)}")
         return None
-    except Exception as e:
-        print(f"Error processing document: {str(e)}")
-        return None
-
-
-if __name__ == "__main__":
-    # Example URL
-    pdf_url = "https://aiagenthust.s3.ap-southeast-2.amazonaws.com/files/Bachelor-Computer-Engineering-program.pdf"
-    
-    # Process document and remove footnotes
-    output_path = process_document(pdf_url, page_range="27")
-    if output_path:
-        print(f"Processing completed successfully")

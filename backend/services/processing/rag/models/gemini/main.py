@@ -3,12 +3,8 @@ Gemini Model for RAG Pipeline
 """
 
 import logging
-import sys
-import os
 
-# Add parent directory to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from base_model import BaseModel
+from backend.services.processing.rag.models.base_model import BaseModel
 
 logger = logging.getLogger(__name__)
 

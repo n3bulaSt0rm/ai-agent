@@ -147,6 +147,7 @@ async def status_update_webhook(request: Request):
     Supports:
     - Updating file status
     - Adding processed page_range to pages_processed_range
+    - Handling deleting and restoring transitions
     """
     try:
         data = await request.json()
@@ -157,21 +158,45 @@ async def status_update_webhook(request: Request):
         file_id = data.get("file_id")  # This is the UUID
         status = data.get("status")
         page_range = data.get("page_range")  # Optional field
+        action = data.get("action")  # Optional field for delete/restore operations
+        previous_status = data.get("previous_status")  # Optional field for restore
         
         # Log the webhook request
         if page_range:
             logger.info(f"Received webhook update for file {file_id}: status={status}, page_range={page_range}")
         else:
-            logger.info(f"Received webhook update for file {file_id}: status={status}")
+            logger.info(f"Received webhook update for file {file_id}: status={status}, action={action}")
         
         # Get the metadata DB
         db = get_metadata_db()
         
-        # First, get the current file info to check page_range
+        # First, get the current file info to check page_range and current status
         file_info = db.get_pdf_file_by_uuid(file_id)
         if not file_info:
             logger.error(f"File {file_id} not found")
             raise HTTPException(status_code=404, detail=f"File {file_id} not found")
+        
+        # Special handling for delete/restore actions
+        if action == "delete" and status == "success" and file_info["status"] == "deleting":
+            # Complete the delete action by changing status to deleted
+            result = db.update_pdf_status_by_uuid(file_id, "deleted")
+            if not result:
+                logger.error(f"Failed to update status to deleted for file {file_id}")
+                raise HTTPException(status_code=500, detail=f"Failed to update status to deleted for file {file_id}")
+            logger.info(f"Successfully completed deletion for file {file_id}")
+            return {"message": f"File {file_id} deletion completed successfully"}
+            
+        elif action == "restore" and status == "success" and file_info["status"] == "restoring":
+            # Get previous status from webhook data or file info
+            target_status = previous_status or file_info.get("previous_status") or "pending"
+            
+            # Complete the restore action by changing status to previous_status
+            result = db.update_pdf_status_by_uuid(file_id, target_status)
+            if not result:
+                logger.error(f"Failed to update status to {target_status} for file {file_id}")
+                raise HTTPException(status_code=500, detail=f"Failed to update status for file {file_id}")
+            logger.info(f"Successfully completed restoration for file {file_id} to status {target_status}")
+            return {"message": f"File {file_id} restoration completed successfully"}
         
         # If page_range is provided, update the pages_processed_range
         if page_range and status == "processed":
@@ -203,8 +228,8 @@ async def status_update_webhook(request: Request):
                 
                 logger.info(f"Added page range {page_range} to file {file_id}, total ranges: {len(new_processed_ranges)}")
         
-        # Always update status if it's different from current
-        if status != file_info["status"]:
+        # Always update status if it's different from current and not a special action
+        if status != file_info["status"] and status not in ["success", "failed"]:
             # Update status in database by UUID
             result = db.update_pdf_status_by_uuid(file_id, status)
             

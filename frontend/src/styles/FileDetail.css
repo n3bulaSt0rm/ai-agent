@@ -932,4 +932,26 @@
 
 .file-detail .mr-1 {
   margin-right: 4px;
+}
+
+/* Add a special class for hiding keyword-related sections but keeping them in the DOM */
+.keywords-hidden {
+  display: none !important;
+}
+
+/* Keep the existing keyword styles for when we unhide them later */
+.keyword-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.keyword-tag {
+  background-color: var(--highlight-color);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--primary-color);
+  font-weight: 500;
 } 

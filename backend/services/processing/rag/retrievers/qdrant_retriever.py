@@ -1,777 +1,485 @@
 import logging
-from typing import List, Dict, Any, Tuple, Optional, Set
-from dataclasses import dataclass, field
+from typing import List, Dict, Any
+from dataclasses import dataclass
 import torch
-import numpy as np
 import os
-from collections import defaultdict
 import json
-import sys
+import math
 
-# Add the project root to the Python path
-# Get absolute path to project root
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(current_dir)  # rag directory
-processing_dir = os.path.dirname(src_dir)  # processing directory
-services_dir = os.path.dirname(processing_dir)  # services directory
-backend_dir = os.path.dirname(services_dir)  # backend directory
-project_root = os.path.dirname(backend_dir)  # project root
-
-# Ensure the project root is in sys.path
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# Import from the central config
 from backend.core.config import settings
-
-# Import common modules using absolute imports
 from backend.services.processing.rag.common.cuda import CudaMemoryManager
-from backend.services.processing.rag.common.qdrant import ChunkData, QueryResult as QdrantQueryResult, QdrantManager
-from backend.services.processing.rag.models.deepseek.main import DeepSeekModel
+from backend.services.processing.rag.common.qdrant import QdrantManager
+from backend.services.processing.rag.utils import create_deepseek_client
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get DeepSeek API key from settings
-deepseek_api_key = settings.DEEPSEEK_API_KEY
-if deepseek_api_key:
-    masked_key = f"{deepseek_api_key[:5]}...{deepseek_api_key[-5:]}" if len(deepseek_api_key) > 10 else "***"
-    logger.info(f"DeepSeek API key loaded from settings: {masked_key}")
-else:
-    logger.error("DeepSeek API key is missing in settings")
-
-@dataclass
-class QueryWithKeywords:
-    """Data class for query and its keywords"""
-    query: str
-    keywords: List[str]
-    
-
 @dataclass
 class SearchResult:
-    """Search result with chunk information"""
     chunk_id: int
     content: str
     score: float
     metadata: Dict[str, Any]
 
-
 @dataclass
 class EmailQueryResult:
-    """Enhanced query result with query information for email processing"""
     original_query: str
-    keywords: List[str]
-    results: List[str]  # Top 3 fulltext results
+    results: List[Dict[str, Any]]
     total_found: int
-
-
-@dataclass
-class RankingConfig:
-    """Configuration for ranking results"""
-    similarity_threshold: float = 0.7
-    min_score_threshold: float = 0.3
-    
-    # Boosting factors (manual post-processing)
-    content_keyword_boost: float = 1.2
-    metadata_keyword_boost: float = 1.8
-    original_chunk_boost: float = 0.1
-    multi_chunk_boost: float = 0.05
-    
-    # Adjacent chunk retrieval
-    adjacent_before: int = 3
-    adjacent_after: int = 3
-    
-    # Results per query
-    results_per_query: int = 3
-
+    context_summary: str = ""
 
 class VietnameseQueryModule:    
     def __init__(self, 
                  embedding_module,
-                 deepseek_api_key: str,  # Required now
+                 deepseek_api_key: str,
+                 memory_manager=None,
                  deepseek_model: str = "deepseek-chat",
-                 config: Optional[RankingConfig] = None):
-        """
-        Initialize query module
+                 reranker_model_name: str = "AITeamVN/Vietnamese_Reranker",
+                 dense_model_name: str = "AITeamVN/Vietnamese_Embedding_v2",
+                 sparse_model_name: str = "Qdrant/bm25",
+                 limit: int = 5,
+                 candidates_limit: int = 10,
+                 dense_weight: float = 0.8,
+                 sparse_weight: float = 0.2,
+                 normalization: str = "min_max",
+                 candidates_multiplier: int = 3):
         
-        Args:
-            embedding_module: Initialized embedding module
-            deepseek_api_key: API key for DeepSeek (required)
-            deepseek_model: DeepSeek model name
-            config: Ranking configuration
-        """
         self.embedding_module = embedding_module
-        self.config = config or RankingConfig()
+        self.limit = limit
+        self.candidates_limit = candidates_limit
+        self.dense_weight = dense_weight
+        self.sparse_weight = sparse_weight
+        self.normalization = normalization
+        self.candidates_multiplier = candidates_multiplier
+        self.reranker_model_name = reranker_model_name
+        self.dense_model_name = dense_model_name
+        self.sparse_model_name = sparse_model_name
         
-        # Setup deepseek model - required
         if not deepseek_api_key:
             raise ValueError("DeepSeek API key is required for query extraction")
             
-        # Log masked API key for debugging
-        masked_key = f"{deepseek_api_key[:5]}...{deepseek_api_key[-5:]}" if len(deepseek_api_key) > 10 else "***"
-        logger.info(f"Using DeepSeek API key: {masked_key} for model: {deepseek_model}")
+        self.deepseek = create_deepseek_client(
+            deepseek_api_key=deepseek_api_key,
+            deepseek_api_url=settings.DEEPSEEK_API_URL,
+            deepseek_model=deepseek_model
+        )
         
-        self.deepseek = DeepSeekModel(api_key=deepseek_api_key, model_name=deepseek_model)
-        logger.info(f"Initialized DeepSeek model: {deepseek_model}")
+        self.memory_manager = memory_manager
         
-        # Setup CUDA memory manager
-        self.memory_manager = CudaMemoryManager()
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+            logger.info("Using CUDA for Vietnamese Query Module")
+        else:
+            self.device = torch.device("cpu")
+            logger.warning("CUDA not available, using CPU for Vietnamese Query Module")
         
-        # Ensure GPU is available
-        if not torch.cuda.is_available():
-            raise RuntimeError("GPU không khả dụng. Hệ thống yêu cầu GPU để hoạt động.")
+        if not hasattr(self.embedding_module, 'qdrant_manager'):
+            raise ValueError("Embedding module must have a qdrant_manager attribute")
+        
+        self.qdrant_manager = self.embedding_module.qdrant_manager
+    
+    def min_max_normalize(self, score: float, min_val: float, max_val: float) -> float:
+        """Min-max normalization to range 0-1"""
+        if max_val == min_val:
+            return 0.0
+        return (score - min_val) / (max_val - min_val)
+    
+    def z_score_normalize(self, score: float, mean: float, std: float) -> float:
+        """Z-score normalization"""
+        if std == 0:
+            return 0.0
+        return (score - mean) / std
+    
+    def weighted_score_fusion(
+        self, 
+        dense_results: List, 
+        sparse_results: List,
+        candidates_limit: int,
+        dense_weight: float = 0.7,
+        sparse_weight: float = 0.3,
+        normalization: str = "min_max"
+    ) -> List[Dict[str, Any]]:
+        """Process dense and sparse search results with weighted fusion"""
+        import math
+        
+        # If both searches failed, return empty results
+        if not dense_results and not sparse_results:
+            logger.warning("Both dense and sparse searches failed")
+            return []
             
-        self.device = torch.device("cuda")
-
+        # If one result set is empty, return the other with appropriate formatting
+        if not dense_results and sparse_results:
+            logger.warning("Dense search failed, using only sparse results")
+            return self._format_search_results(sparse_results[:candidates_limit])
+            
+        if not sparse_results and dense_results:
+            logger.warning("Sparse search failed, using only dense results")
+            return self._format_search_results(dense_results[:candidates_limit])
         
-    def extract_queries_from_email(self, email_content: str) -> List[QueryWithKeywords]:
-        """Extract multiple queries with keywords from email content using DeepSeek API"""
-        if not email_content or not email_content.strip():
-            raise ValueError("Email content cannot be empty")
+        # For both dense and sparse results, collect all unique chunks
+        all_chunks = {}
+        
+        # Extract score arrays for normalization
+        dense_scores = [r.score for r in dense_results]
+        sparse_scores = [r.score for r in sparse_results]
+        
+        # Calculate normalization parameters
+        if normalization == "min_max" and dense_scores and sparse_scores:
+            dense_min, dense_max = min(dense_scores), max(dense_scores)
+            sparse_min, sparse_max = min(sparse_scores), max(sparse_scores)
+        elif normalization == "z_score" and dense_scores and sparse_scores:
+            dense_mean = sum(dense_scores) / len(dense_scores)
+            dense_std = math.sqrt(sum((x - dense_mean)**2 for x in dense_scores) / len(dense_scores))
+            sparse_mean = sum(sparse_scores) / len(sparse_scores)
+            sparse_std = math.sqrt(sum((x - sparse_mean)**2 for x in sparse_scores) / len(sparse_scores))
+        else:
+            # Fallback normalization
+            normalization = "none"
+        
+        # Process dense results
+        for result in dense_results:
+            chunk_id = result.payload.get("chunk_id", 0)
+            score = result.score
+            
+            # Normalize score based on selected method
+            if normalization == "min_max" and dense_scores:
+                score = self.min_max_normalize(score, dense_min, dense_max)
+            elif normalization == "z_score" and dense_scores:
+                score = self.z_score_normalize(score, dense_mean, dense_std)
+            
+            # Store result data
+            all_chunks[chunk_id] = {
+                "payload": result.payload,
+                "dense_score": score, 
+                "sparse_score": 0.0,
+                "raw_dense_score": result.score,
+                "raw_sparse_score": 0.0
+            }
+        
+        # Process sparse results
+        for result in sparse_results:
+            chunk_id = result.payload.get("chunk_id", 0)
+            score = result.score
+            
+            # Normalize score based on selected method
+            if normalization == "min_max" and sparse_scores:
+                score = self.min_max_normalize(score, sparse_min, sparse_max)
+            elif normalization == "z_score" and sparse_scores:
+                score = self.z_score_normalize(score, sparse_mean, sparse_std)
+            
+            # Update existing entry or add new one
+            if chunk_id in all_chunks:
+                all_chunks[chunk_id]["sparse_score"] = score
+                all_chunks[chunk_id]["raw_sparse_score"] = result.score
+            else:
+                all_chunks[chunk_id] = {
+                    "payload": result.payload,
+                    "dense_score": 0.0,
+                    "sparse_score": score,
+                    "raw_dense_score": 0.0,
+                    "raw_sparse_score": result.score
+                }
+        
+        # Combine scores and prepare final results
+        final_results = []
+        for chunk_id, data in all_chunks.items():
+            # Calculate weighted final score
+            final_score = (data["dense_score"] * dense_weight + 
+                          data["sparse_score"] * sparse_weight)
+            
+            # Create result dictionary
+            payload = data["payload"]
+            result = {
+                "chunk_id": chunk_id,
+                "content": payload.get("content", ""),
+                "score": final_score,
+                "normalized_dense_score": data["dense_score"],
+                "normalized_sparse_score": data["sparse_score"],
+                "raw_dense_score": data["raw_dense_score"],
+                "raw_sparse_score": data["raw_sparse_score"],
+                "metadata": {
+                    "file_id": payload.get("file_id", "unknown"),
+                    "parent_chunk_id": payload.get("parent_chunk_id", 0),
+                    "file_created_at": payload.get("file_created_at", None)
+                }
+            }
+            
+            # Add any additional metadata from payload
+            for key, value in payload.items():
+                if key not in ["chunk_id", "content", "file_id", "parent_chunk_id", "file_created_at"]:
+                    result["metadata"][key] = value
+            
+            final_results.append(result)
+        
+        # Sort by combined score (descending) and limit results
+        sorted_results = sorted(final_results, key=lambda x: x["score"], reverse=True)
+        return sorted_results[:candidates_limit]
+
+    def _format_search_results(self, search_results: List) -> List[Dict[str, Any]]:
+        """Format single search results to match hybrid output format"""
+        results = []
+        for hit in search_results:
+            # Create metadata dictionary
+            metadata = {
+                "file_id": hit.payload.get("file_id", "unknown"),
+                "parent_chunk_id": hit.payload.get("parent_chunk_id", 0),
+                "file_created_at": hit.payload.get("file_created_at", None)
+            }
+            
+            # Add any additional metadata fields from the payload
+            for key, value in hit.payload.items():
+                if key not in ["chunk_id", "content", "file_id", "parent_chunk_id", "file_created_at"]:
+                    metadata[key] = value
+            
+            # Format result
+            result = {
+                "chunk_id": hit.payload.get("chunk_id", 0),
+                "content": hit.payload.get("content", ""),
+                "score": hit.score,
+                "metadata": metadata
+            }
+            results.append(result)
+        
+        return results
+    
+    def rerank_results(self, query: str, results: List[Dict[str, Any]], top_k: int = None) -> List[Dict[str, Any]]:
+        """Rerank results using the CrossEncoder model"""
+        if not self.qdrant_manager.reranker or not results:
+            return results[:top_k] if top_k else results
+        
+        if top_k is None:
+            top_k = len(results)
         
         try:
-            # Construct prompt for DeepSeek to extract queries and keywords
-            prompt = f"""Hãy phân tích email sau và trích xuất tất cả các câu hỏi/yêu cầu thông tin cùng với từ khóa tìm kiếm cho mỗi câu hỏi.
+            # Prepare query-document pairs
+            query_doc_pairs = [(query, result["content"]) for result in results]
+            
+            # Get scores from reranker
+            with torch.no_grad():
+                reranker_scores = self.qdrant_manager.reranker.predict(query_doc_pairs)
+                if hasattr(reranker_scores, 'tolist'):
+                    reranker_scores = reranker_scores.tolist()
+            
+            # Add scores to results
+            reranked = []
+            for i, result in enumerate(results):
+                result_copy = result.copy()
+                result_copy["reranker_score"] = float(reranker_scores[i])
+                result_copy["original_rank"] = i + 1
+                reranked.append(result_copy)
+            
+            # Sort by reranker score
+            reranked.sort(key=lambda x: x["reranker_score"], reverse=True)
+            return reranked[:top_k]
+            
+        except Exception as e:
+            logger.error(f"Error in reranking: {e}")
+            return results[:top_k]
+        
+    def retrieve(self, query: str, limit: int = 5, candidates_limit: int = 10, 
+               dense_weight: float = 0.7, sparse_weight: float = 0.3, 
+               normalization: str = "min_max", candidates_multiplier: int = 3) -> List[Dict[str, Any]]:
+        if not query.strip():
+            return []
+        
+        try:
+            search_results = self.qdrant_manager.hybrid_search(
+                query=query,
+                candidates_limit=candidates_limit,
+                candidates_multiplier=candidates_multiplier
+            )
+            
+            dense_results = search_results.get("dense_results", [])
+            sparse_results = search_results.get("sparse_results", [])
+            
+            candidates = self.weighted_score_fusion(
+                dense_results, sparse_results, candidates_limit,
+                dense_weight, sparse_weight, normalization
+            )
+            
+            if not candidates:
+                return []
+            
+            if self.qdrant_manager.reranker:
+                return self.rerank_results(query, candidates, limit)
+            else:
+                return candidates[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error in search: {e}")
+            return []  # Return empty list to maintain API compatibility
+    
+
+
+    def process_single_query(self, query_text: str) -> List[Dict[str, Any]]:
+        if not query_text or not query_text.strip():
+            return []
+        
+        try:
+            search_results = self.retrieve(
+                query=query_text.strip(),
+                limit=self.limit,
+                candidates_limit=self.candidates_limit,
+                dense_weight=self.dense_weight,
+                sparse_weight=self.sparse_weight,
+                normalization=self.normalization,
+                candidates_multiplier=self.candidates_multiplier
+            )
+            
+
+            return search_results
+            
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            return []
+
+    def extract_queries_and_summary_from_email(self, email_content: str) -> tuple[List[str], str, object]:
+        """Start a conversation with DeepSeek and extract queries and summary from email"""
+        if not email_content or not email_content.strip():
+            return ["Không có nội dung email"], "Email trống", None
+        
+        first_line_fallback = email_content.strip().split('\n')[0][:100]
+        basic_summary = f"Email về: {first_line_fallback}"
+        
+        conversation = None
+        try:
+            system_message = "Bạn là trợ lý AI chuyên nghiệp hỗ trợ phòng công tác sinh viên. Bạn sẽ giúp phân tích email, tìm kiếm thông tin và soạn thảo phản hồi."
+            conversation = self.deepseek.start_conversation(system_message)
+            logger.info("Successfully started DeepSeek conversation")
+        except Exception as e:
+            logger.error(f"Failed to start DeepSeek conversation: {e}")
+            return [first_line_fallback], basic_summary, None
+        
+        try:
+            prompt = f"""Hãy phân tích đoạn hội thoại email sau và:
+1. Trích xuất tất cả các câu hỏi/yêu cầu thông tin mà sinh viên chưa có câu trả lời
+2. Tạo một tóm tắt thông tin một cách đẩy đủ, súc tích về nội dung đoạn hội thoại email
 
 Trả về kết quả dưới dạng JSON với format sau:
 {{
     "queries": [
         {{
-            "query": "câu hỏi được viết lại một cách rõ ràng",
-            "keywords": ["từ khóa 1", "từ khóa 2", "từ khóa 3"]
-        }},
-        {{
-            "query": "câu hỏi thứ 2",
-            "keywords": ["từ khóa A", "từ khóa B"]
+            "query": "câu hỏi được viết một cách rõ ràng"
         }}
-    ]
+    ],
+    "summary": "tóm tắt thông tin về nội dung hội thoại email, đảm bảo đủ thông tin để trả lời các câu hỏi, súc tích, không quá 700 từ"
 }}
 
 Lưu ý:
 - Mỗi query phải là một câu hỏi hoàn chỉnh và rõ ràng
-- Keywords phải là những từ khóa quan trọng để tìm kiếm thông tin liên quan
 - Đảm bảo đúng chính tả tiếng Việt
 - Chỉ trả về JSON, không thêm giải thích
 
 Email cần phân tích:
-{email_content}
-
-JSON:"""
+{email_content}"""
             
-            # Use DeepSeek to generate queries and keywords
-            response_text = self.deepseek.generate_answer("", prompt)
+            response_text = self.deepseek.send_message(
+                conversation=conversation, 
+                message=prompt,
+                temperature=0.4,
+                max_tokens=4000,
+                error_default=None  # Use None to raise exception on error
+            )
             
-            # Add debug logging for the raw response
-            logger.info(f"DeepSeek raw response length: {len(response_text) if response_text else 0}")
+            # If no response or empty, return fallback but keep conversation
             if not response_text or not response_text.strip():
-                logger.error("Empty response from DeepSeek API")
-                raise ValueError("Empty response from DeepSeek API")
+                logger.warning("DeepSeek returned empty response, using fallback")
+                return [first_line_fallback], basic_summary, conversation
             
-            # Log first 100 characters of response for debugging
-            preview = response_text[:100] + "..." if len(response_text) > 100 else response_text
-            logger.debug(f"Response preview: {preview}")
+            response_text = response_text.strip()
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
             
-            # Parse JSON response
-            try:
-                # Clean response text (remove any extra text before/after JSON)
-                response_text = response_text.strip()
-                if response_text.startswith('```json'):
-                    response_text = response_text[7:]
-                if response_text.endswith('```'):
-                    response_text = response_text[:-3]
-                response_text = response_text.strip()
-                
-                # Additional check for empty response after cleaning
-                if not response_text:
-                    logger.error("Empty JSON content after cleaning response")
-                    raise ValueError("Empty JSON content from DeepSeek")
-                
-                try:
-                    parsed_response = json.loads(response_text)
-                except json.JSONDecodeError as je:
-                    # Try to extract JSON using regex as a fallback
-                    logger.warning(f"JSON decode error: {je}. Attempting to extract JSON with regex...")
-                    import re
-                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                    if json_match:
-                        try:
-                            parsed_response = json.loads(json_match.group(0))
-                            logger.info("Successfully extracted JSON using regex")
-                        except:
-                            logger.error(f"Failed to parse JSON after regex extraction")
-                            raise ValueError(f"Invalid JSON response from DeepSeek after fallback extraction")
-                    else:
-                        # If no JSON-like structure found, fallback to a simple format
-                        logger.error("No JSON structure found in response. Creating fallback format.")
-                        # Create a simple query from the email content
-                        query = email_content.strip().split('\n')[0][:100]  # First line, truncated
-                        keywords = query.split()[:5]  # First 5 words as keywords
-                        
-                        return [QueryWithKeywords(query=query, keywords=keywords)]
-                
-                queries_data = parsed_response.get("queries", [])
-                
-                if not queries_data:
-                    logger.warning("No queries found in DeepSeek response, using fallback")
-                    # Create a fallback query
-                    query = email_content.strip().split('\n')[0][:100]  # First line, truncated
-                    keywords = query.split()[:5]  # First 5 words as keywords
-                    return [QueryWithKeywords(query=query, keywords=keywords)]
-                
-                # Convert to QueryWithKeywords objects
-                extracted_queries = []
-                for item in queries_data:
-                    query = item.get("query", "").strip()
-                    keywords = [kw.strip() for kw in item.get("keywords", []) if kw.strip()]
-                    
-                    if query and keywords:
-                        extracted_queries.append(QueryWithKeywords(query=query, keywords=keywords))
-                
-                if not extracted_queries:
-                    logger.warning("No valid queries with keywords extracted, using fallback")
-                    # Create a fallback query
-                    query = email_content.strip().split('\n')[0][:100]  # First line, truncated
-                    keywords = query.split()[:5]  # First 5 words as keywords
-                    return [QueryWithKeywords(query=query, keywords=keywords)]
-                
-                logger.info(f"Extracted {len(extracted_queries)} queries from email")
-                for i, q in enumerate(extracted_queries):
-                    logger.info(f"Query {i+1}: '{q.query}' - Keywords: {q.keywords}")
-                
-                return extracted_queries
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse DeepSeek JSON response: {e}")
-                logger.error(f"Response text: {response_text}")
-                raise ValueError(f"Invalid JSON response from DeepSeek: {e}")
+            parsed_response = json.loads(response_text.strip())
+            
+            queries = [item.get("query", "").strip() 
+                      for item in parsed_response.get("queries", []) 
+                      if item.get("query", "").strip()]
+            
+            summary = parsed_response.get("summary", "").strip()
+            if not summary:
+                summary = basic_summary
+            
+            logger.info(f"Successfully extracted {len(queries)} queries from email")
+            return (queries if queries else [first_line_fallback]), summary, conversation
                 
         except Exception as e:
-            logger.error(f"Error extracting queries from email with DeepSeek: {e}")
-            raise RuntimeError(f"Failed to extract queries using DeepSeek API: {e}")
-            
-    def _normalize_embedding(self, embedding):
-        """Normalize embedding to numpy array"""
-        if isinstance(embedding, torch.Tensor):
-            if embedding.is_cuda:
-                embedding = embedding.cpu()
-            embedding = embedding.detach().numpy()
-        elif isinstance(embedding, list):
-            embedding = np.array(embedding)
-        elif isinstance(embedding, np.ndarray):
-            pass  # Already numpy array
-        else:
-            raise ValueError(f"Unsupported embedding type: {type(embedding)}")
-        
-        if embedding.ndim > 1:
-            embedding = embedding.flatten()
-        
-        return embedding
-    
-    def semantic_search(self, query: str, keywords: List[str], top_k: int = 10) -> List[SearchResult]:
-        """
-        Semantic search with keyword boosting using standard Qdrant API
-        
-        Args:
-            query: User query
-            keywords: List of keywords for boosting (required)
-            top_k: Number of results to return
-        """
-        if not query or not query.strip():
-            raise ValueError("Query cannot be empty")
-        
-        if not keywords:
-            raise ValueError("Keywords are required for search")
-        
-        query = query.strip()
-        
-        # Generate embedding
-        try:
-            query_embedding = self.embedding_module.generate_embedding(query)
-            
-            # Use standard vector search first, then apply keyword boosting manually
-            search_results = self._vector_search_with_keywords(query_embedding, keywords, top_k)
-            logger.info(f"Performed vector search with keyword filtering: {keywords}")
-            
-            return search_results
-            
-        except Exception as e:
-            logger.error(f"Error in semantic search: {e}")
-            raise RuntimeError(f"Semantic search failed: {e}")
-            
-    def _vector_search_with_keywords(self, query_vector: List[float], keywords: List[str], top_k: int = 10) -> List[SearchResult]:
-        """Perform vector search with keyword filtering using standard Qdrant API"""
-        try:
-            from qdrant_client.models import Filter, FieldCondition, MatchText, MatchAny, SearchParams
-            
-            # Get access to the Qdrant client
-            client = self.embedding_module.qdrant_manager.client
-            collection_name = self.embedding_module.qdrant_manager.collection_name
-            
-            # Create keyword filters for content and metadata
-            content_conditions = []
-            metadata_conditions = []
-            
-            for keyword in keywords:
-                if keyword.strip():
-                    # Content matching
-                    content_conditions.append(
-                        FieldCondition(key="content", match=MatchText(text=keyword.strip()))
-                    )
-                    # Metadata keywords matching
-                    metadata_conditions.append(
-                        FieldCondition(key="keywords", match=MatchAny(any=[keyword.strip()]))
-                    )
-            
-            # Perform vector search using standard API
-            vector_results = client.search(
-                collection_name=collection_name,
-                query_vector=query_vector,
-                limit=top_k * 2,  # Get more results for filtering
-                with_payload=True,
-                with_vectors=False,
-                score_threshold=self.config.min_score_threshold
-            )
-            
-            # Convert to SearchResult and apply manual keyword boosting
-            all_results = []
-            for hit in vector_results:
-                content = str(hit.payload.get("content", ""))
-                metadata = {
-                    "file_id": hit.payload["file_id"],
-                    "parent_chunk_id": hit.payload["parent_chunk_id"],
-                }
-                
-                # Calculate keyword boost manually
-                boost_factor = 1.0
-                
-                # Check content for keywords
-                content_lower = content.lower()
-                content_matches = 0
-                for keyword in keywords:
-                    if keyword.lower() in content_lower:
-                        content_matches += 1
-                
-                if content_matches > 0:
-                    boost_factor *= (self.config.content_keyword_boost ** content_matches)
-                
-                # Check metadata keywords
-                chunk_keywords = hit.payload.get("keywords", [])
-                if chunk_keywords:
-                    metadata_matches = 0
-                    for keyword in keywords:
-                        keyword_lower = keyword.lower()
-                        # Handle different types of chunk_keywords
-                        for k in chunk_keywords:
-                            if isinstance(k, str):
-                                # If k is a string, compare directly
-                                if keyword_lower in k.lower():
-                                    metadata_matches += 1
-                                    break
-                            elif isinstance(k, list):
-                                # If k is a list, check all items in the list
-                                for item in k:
-                                    if isinstance(item, str) and keyword_lower in item.lower():
-                                        metadata_matches += 1
-                                        break
-                            else:
-                                # For other types, convert to string and compare
-                                try:
-                                    k_str = str(k).lower()
-                                    if keyword_lower in k_str:
-                                        metadata_matches += 1
-                                        break
-                                except:
-                                    # Skip items that can't be converted to string
-                                    pass
-                    
-                    if metadata_matches > 0:
-                        boost_factor *= (self.config.metadata_keyword_boost ** metadata_matches)
-                
-                # Apply boost to score
-                boosted_score = hit.score * boost_factor
-                
-                result = SearchResult(
-                    chunk_id=hit.payload["chunk_id"],
-                    content=content,
-                    score=boosted_score,
-                    metadata=metadata
-                )
-                all_results.append(result)
-            
-            # Sort by boosted score and return top_k
-            all_results.sort(key=lambda x: x.score, reverse=True)
-            return all_results[:top_k]
-            
-        except Exception as e:
-            logger.error(f"Error in vector search with keywords: {e}")
-            raise RuntimeError(f"Vector search with keywords failed: {e}")
-    
-    def get_adjacent_chunks(self, 
-                          chunk_id: int, 
-                          file_id: str, 
-                          parent_chunk_id: int,
-                          before: Optional[int] = None, 
-                          after: Optional[int] = None) -> List[ChunkData]:
-        """Get adjacent chunks to provide more context"""
-        before = before if before is not None else self.config.adjacent_before
-        after = after if after is not None else self.config.adjacent_after
-        
-        try:
-            return self.embedding_module.qdrant_manager.get_adjacent_chunks(
-                chunk_id=chunk_id,
-                file_id=file_id,
-                parent_chunk_id=parent_chunk_id,
-                before=before,
-                after=after
-            )
-        except Exception as e:
-            logger.error(f"Error getting adjacent chunks: {e}")
-            return []
-    
-    def collect_and_group_chunks(self, search_results: List[SearchResult]) -> Dict[str, List[ChunkData]]:
-        """Collect all chunks (original + expanded) and group by file_id + parent_chunk_id"""
-        if not search_results:
-            return {}
-        
-        # Collect all unique chunks
-        all_chunks_dict = {}  # chunk_id -> ChunkData
-        self._chunk_metadata = {}  # chunk_id -> metadata
-        
-        # Process original search results
-        for result in search_results:
-            try:
-                # Extract metadata
-                file_id = result.metadata["file_id"]
-                parent_chunk_id = result.metadata["parent_chunk_id"]
-                chunk_id = result.chunk_id
-                
-                # Store original chunk
-                original_chunk = ChunkData(
-                    chunk_id=chunk_id,
-                    content=result.content,
-                    file_id=file_id,
-                    parent_chunk_id=parent_chunk_id
-                )
-                
-                all_chunks_dict[chunk_id] = original_chunk
-                self._chunk_metadata[chunk_id] = {
-                    'is_original': True,
-                    'boosted_score': result.score,  # Score with keyword boosts
-                    'file_id': file_id,
-                    'parent_chunk_id': parent_chunk_id
-                }
-                
-                # Get adjacent chunks
-                adjacent_chunks = self.get_adjacent_chunks(
-                    chunk_id=chunk_id,
-                    file_id=file_id,
-                    parent_chunk_id=parent_chunk_id
-                )
-                
-                # Add adjacent chunks
-                for adj_chunk in adjacent_chunks:
-                    adj_id = adj_chunk.chunk_id
-                    if adj_id not in all_chunks_dict:
-                        all_chunks_dict[adj_id] = adj_chunk
-                        self._chunk_metadata[adj_id] = {
-                            'is_original': False,
-                            'boosted_score': 0.0,
-                            'file_id': adj_chunk.file_id,
-                            'parent_chunk_id': adj_chunk.parent_chunk_id,
-                            'expanded_from': chunk_id
-                        }
-                    else:
-                        # Track multiple expansions
-                        if 'expanded_from' in self._chunk_metadata[adj_id]:
-                            if isinstance(self._chunk_metadata[adj_id]['expanded_from'], list):
-                                self._chunk_metadata[adj_id]['expanded_from'].append(chunk_id)
-                            else:
-                                self._chunk_metadata[adj_id]['expanded_from'] = [
-                                    self._chunk_metadata[adj_id]['expanded_from'], 
-                                    chunk_id
-                                ]
-                        else:
-                            self._chunk_metadata[adj_id]['expanded_from'] = chunk_id
-            except Exception as e:
-                logger.error(f"Error processing search result {result.chunk_id}: {e}")
-                continue
-        
-        # Group chunks by file_id + parent_chunk_id
-        grouped_chunks = defaultdict(list)
-        
-        for chunk_data in all_chunks_dict.values():
-            group_key = f"{chunk_data.file_id}_{chunk_data.parent_chunk_id}"
-            grouped_chunks[group_key].append(chunk_data)
-        
-        # Sort and filter groups
-        final_groups = {}
-        for group_key, chunks in grouped_chunks.items():
-            try:
-                # Sort chunks
-                sorted_chunks = sorted(chunks, key=lambda x: x.chunk_id)
-                
-                # Check if group has original chunk
-                has_original = any(
-                    self._chunk_metadata.get(chunk.chunk_id, {}).get('is_original', False) 
-                    for chunk in sorted_chunks
-                )
-                
-                if has_original:
-                    final_groups[group_key] = sorted_chunks
-            except Exception as e:
-                logger.error(f"Error finalizing group {group_key}: {e}")
-                continue
-        
-        return dict(final_groups)
-    
-    def calculate_group_score(self, chunks: List[ChunkData]) -> float:
-        """Calculate final score for a chunk group using boosted scores"""
-        if not chunks:
-            return 0.0
-        
-        try:
-            # Get original chunks and their boosted scores
-            original_scores = []
-            for chunk in chunks:
-                chunk_meta = self._chunk_metadata.get(chunk.chunk_id, {})
-                if chunk_meta.get('is_original', False):
-                    boosted_score = chunk_meta.get('boosted_score', 0.0)
-                    # Add small boost for original chunks
-                    final_score = boosted_score + self.config.original_chunk_boost
-                    original_scores.append(final_score)
-            
-            if not original_scores:
-                return 0.0
-            
-            # Use max score from original chunks as base
-            max_score = max(original_scores)
-            
-            # Add boost for multiple original chunks
-            if len(original_scores) > 1:
-                multi_chunk_boost = self.config.multi_chunk_boost * (len(original_scores) - 1)
-                max_score += multi_chunk_boost
-            
-            return float(max_score)
-            
-        except Exception as e:
-            logger.error(f"Error calculating group score: {e}")
-            return 0.0
-    
-    def rank_groups(self, grouped_chunks: Dict[str, List[ChunkData]]) -> List[Tuple[str, List[ChunkData], float]]:
-        """Rank groups using boosted scores"""
-        if not grouped_chunks:
-            return []
-        
-        ranked_results = []
-        
-        for group_key, chunks in grouped_chunks.items():
-            try:
-                # Calculate group score using boosted scores
-                group_score = self.calculate_group_score(chunks)
-                ranked_results.append((group_key, chunks, group_score))
-                
-            except Exception as e:
-                logger.error(f"Error ranking group {group_key}: {e}")
-                continue
-        
-        # Sort by score descending
-        ranked_results.sort(key=lambda x: x[2], reverse=True)
-        
-        return ranked_results
-    
-    def process_single_query(self, query_text: str, keywords: List[str]) -> List[str]:
-        """Process a single query with its keywords, returning top 3 fulltext results"""
-        if not query_text or not query_text.strip():
-            raise ValueError("Query text cannot be empty")
-        
-        if not keywords:
-            raise ValueError("Keywords are required for search")
-        
-        query_text = query_text.strip()
-        
-        try:
-            # Semantic search with keyword boost
-            search_results = self.semantic_search(query_text, keywords, self.config.results_per_query * 3)
-            
-            if not search_results:
-                logger.warning(f"No search results found for query: '{query_text}'")
-                return []
-            
-            # Group chunks
-            grouped_chunks = self.collect_and_group_chunks(search_results)
-            
-            if not grouped_chunks:
-                logger.warning(f"No grouped chunks found for query: '{query_text}'")
-                return []
-            
-            # Rank using boosted scores
-            ranked_results = self.rank_groups(grouped_chunks)
-            
-            # Get only top results and extract just the combined text
-            full_texts = []
-            for _, chunks, _ in ranked_results[:self.config.results_per_query]:
-                # Create combined content
-                chunk_texts = []
-                for chunk in chunks:
-                    chunk_texts.append(chunk.content)
-                
-                combined_content = "\n\n".join(chunk_texts)
-                full_texts.append(combined_content)
-            
-            logger.info(f"Query '{query_text}' returned {len(full_texts)} results")
-            return full_texts
-            
-        except Exception as e:
-            logger.error(f"Error processing query '{query_text}': {e}")
-            raise RuntimeError(f"Query processing failed: {e}")
-    
-    def process_email(self, email_content: str) -> List[EmailQueryResult]:
-        """
-        Complete email processing pipeline:
-        1. Extract queries and keywords from email
-        2. Process each query individually 
-        3. Return results for all queries
-        """
+            logger.error(f"Error in DeepSeek message processing: {e}")
+            # Return fallback but keep conversation for future use
+            return [first_line_fallback], basic_summary, conversation
+
+    def process_email(self, email_content: str) -> tuple[List[EmailQueryResult], object]:
+        """Process an entire email with multiple queries and return results with conversation"""
         if not email_content or not email_content.strip():
-            raise ValueError("Email content cannot be empty")
+            return [], None
         
         try:
-            # Step 1: Extract queries and keywords from email
-            queries_with_keywords = self.extract_queries_from_email(email_content)
+            queries, summary, conversation = self.extract_queries_and_summary_from_email(email_content)
+            if not queries:
+                return [], conversation
             
-            if not queries_with_keywords:
-                logger.warning("No queries extracted from email")
-                return []
-            
-            # Step 2: Process each query
-            all_results = []
-            for query_data in queries_with_keywords:
+            results = []
+            for i, query in enumerate(queries):
                 try:
-                    # Process single query
-                    results = self.process_single_query(query_data.query, query_data.keywords)
-                    
-                    # Create result object
-                    query_result = EmailQueryResult(
-                        original_query=query_data.query,
-                        keywords=query_data.keywords,
-                        results=results,
-                        total_found=len(results)
-                    )
-                    
-                    all_results.append(query_result)
-                    
+                    query_results = self.process_single_query(query)
+                    results.append(EmailQueryResult(
+                        original_query=query,
+                        results=query_results,
+                        total_found=len(query_results),
+                        context_summary=summary if i == 0 else ""
+                    ))
                 except Exception as e:
-                    logger.error(f"Error processing query '{query_data.query}': {e}")
-                    # Add empty result for failed query
-                    query_result = EmailQueryResult(
-                        original_query=query_data.query,
-                        keywords=query_data.keywords,
+                    logger.error(f"Error processing query '{query}': {e}")
+                    results.append(EmailQueryResult(
+                        original_query=query,
                         results=[],
-                        total_found=0
-                    )
-                    all_results.append(query_result)
-                    continue
+                        total_found=0,
+                        context_summary=summary 
+                    ))
             
-            # Clean up memory
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # Clean up resources
+            if self.memory_manager:
+                self.memory_manager.cleanup_memory()
             
-            logger.info(f"Email processing completed. Processed {len(queries_with_keywords)} queries, "
-                       f"found results for {sum(1 for r in all_results if r.total_found > 0)} queries")
-            
-            return all_results
+            return results, conversation
             
         except Exception as e:
-            logger.error(f"Error in email processing pipeline: {e}")
-            raise RuntimeError(f"Email processing pipeline failed: {e}")
+            logger.error(f"Email processing error: {e}")
+            if self.memory_manager:
+                self.memory_manager.cleanup_memory()
+            return [], None
 
 
-# Factory function
 def create_query_module(
     embedding_module,
-    deepseek_api_key: str,  # Required now
+    deepseek_api_key: str,
+    memory_manager=None,
     deepseek_model: str = "deepseek-chat",
-    config: Optional[RankingConfig] = None
+    reranker_model_name: str = "AITeamVN/Vietnamese_Reranker",
+    dense_model_name: str = "AITeamVN/Vietnamese_Embedding_v2",
+    sparse_model_name: str = "Qdrant/bm25",
+    limit: int = 5,
+    candidates_limit: int = 10,
+    dense_weight: float = 0.8,
+    sparse_weight: float = 0.2,
+    normalization: str = "min_max",
+    candidates_multiplier: int = 3
 ) -> VietnameseQueryModule:
-    """Factory function to create query module"""
     return VietnameseQueryModule(
         embedding_module=embedding_module,
         deepseek_api_key=deepseek_api_key,
+        memory_manager=memory_manager,
         deepseek_model=deepseek_model,
-        config=config
+        reranker_model_name=reranker_model_name,
+        dense_model_name=dense_model_name,
+        sparse_model_name=sparse_model_name,
+        limit=limit,
+        candidates_limit=candidates_limit,
+        dense_weight=dense_weight,
+        sparse_weight=sparse_weight,
+        normalization=normalization,
+        candidates_multiplier=candidates_multiplier
     )
-
-
-# Example usage
-if __name__ == "__main__":
-    try:
-        print("Initializing Vietnamese Query Module for Email Processing...")
-        
-        # Create simplified config
-        config = RankingConfig(
-            similarity_threshold=0.7,
-            min_score_threshold=0.3,
-    
-            content_keyword_boost=1.2,
-            metadata_keyword_boost=1.8,
-            original_chunk_boost=0.1,
-            multi_chunk_boost=0.05,
-    
-            # Adjacent chunk retrieval
-            adjacent_before=3,
-            adjacent_after=3,
-            
-            # Results per query
-            results_per_query=3
-        )
-        
-        # Create embedding module
-        embedding_module = VietnameseEmbeddingModule(
-            qdrant_host="localhost",
-            qdrant_port=6333,
-            collection_name="vietnamese_documents",
-            model_name="bkai-foundation-models/vietnamese-bi-encoder"
-        )
-        
-        query_module = create_query_module(
-            embedding_module=embedding_module,
-            deepseek_api_key=deepseek_api_key,
-            deepseek_model="deepseek-chat",
-            config=config
-        )
-        
-        # Test email
-        test_email = """
-Xin chào,
-
-Tôi là sinh viên năm cuối và có một số câu hỏi về đồ án tốt nghiệp:
-
-1. Cách tính điểm quá trình đồ án tốt nghiệp như thế nào?
-2. Thời gian nộp báo cáo đồ án cuối kỳ là khi nào?
-3. Có cần đăng ký chương trình kỹ sư tài năng không?
-
-Cảm ơn thầy/cô!
-        """
-        
-        results = query_module.process_email(test_email)
-        
-        print(f"\n=== EMAIL PROCESSING RESULTS ===")
-        print(f"Extracted and processed {len(results)} queries")
-        
-        for i, result in enumerate(results):
-            print(f"\n--- QUERY {i+1} ---")
-            print(f"Query: {result.original_query}")
-            print(f"Keywords: {result.keywords}")
-            print(f"Found {result.total_found} results")
-            
-            for j, text in enumerate(result.results):
-                print(f"\n** Result {j+1} **")
-                print(text)
-        
-        
-    except Exception as e:
-        print(f"Error testing query module: {e}")
-        import traceback
-        traceback.print_exc()

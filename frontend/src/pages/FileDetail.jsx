@@ -224,7 +224,17 @@ const FileDetail = () => {
       try {
         const ranges = JSON.parse(document.pages_processed_range);
         if (Array.isArray(ranges) && ranges.length > 0) {
-          existingRanges.push(...ranges);
+          // Parse string ranges like "1-5" to objects like {start: 1, end: 5}
+          ranges.forEach(rangeStr => {
+            try {
+              const [start, end] = rangeStr.split('-').map(num => parseInt(num, 10));
+              if (!isNaN(start) && !isNaN(end)) {
+                existingRanges.push({ start, end });
+              }
+            } catch (e) {
+              console.error("Error parsing range:", rangeStr, e);
+            }
+          });
         }
       } catch (e) {
         console.error("Error parsing processed ranges:", e);
@@ -326,15 +336,20 @@ const FileDetail = () => {
       // Validate page ranges against existing processed ranges
       if (document.pages_processed_range) {
         try {
-          const existingRanges = JSON.parse(document.pages_processed_range);
-          if (Array.isArray(existingRanges)) {
+          const existingRangesStrings = JSON.parse(document.pages_processed_range);
+          if (Array.isArray(existingRangesStrings)) {
             for (const newRange of pageRanges) {
-              for (const existingRange of existingRanges) {
-                if (
-                  (newRange.start <= existingRange.end && newRange.end >= existingRange.start)
-                ) {
-                  setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRange.start}-${existingRange.end}`);
-                  return;
+              for (const existingRangeStr of existingRangesStrings) {
+                try {
+                  const [start, end] = existingRangeStr.split('-').map(num => parseInt(num, 10));
+                  if (
+                    (newRange.start <= end && newRange.end >= start)
+                  ) {
+                    setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRangeStr}`);
+                    return;
+                  }
+                } catch (e) {
+                  console.error("Error parsing range:", existingRangeStr, e);
                 }
               }
             }
@@ -347,7 +362,10 @@ const FileDetail = () => {
       setLoadingAction({ isLoading: true, message: 'Processing document...' });
       setShowProcessModal(false);
       
-      await filesApi.processFile(document.id, { page_ranges: pageRanges });
+      // Convert page ranges to the string format expected by the backend
+      const pageRangesStrings = pageRanges.map(range => `${range.start}-${range.end}`);
+      
+      await filesApi.processFile(document.id, { page_ranges: pageRangesStrings });
       toast.success(`Processing document...`);
       
       // Refresh document data
@@ -369,9 +387,13 @@ const FileDetail = () => {
       const ranges = JSON.parse(document.pages_processed_range);
       if (!Array.isArray(ranges) || ranges.length === 0) return "None";
       
+      // Sort the string ranges by their start number
       return ranges
-        .sort((a, b) => a.start - b.start)
-        .map(range => `${range.start}-${range.end}`)
+        .sort((a, b) => {
+          const [aStart] = a.split('-').map(num => parseInt(num, 10));
+          const [bStart] = b.split('-').map(num => parseInt(num, 10));
+          return aStart - bStart;
+        })
         .join(", ");
     } catch (e) {
       console.error("Error formatting processed ranges:", e);
@@ -598,6 +620,12 @@ const FileDetail = () => {
                 )}
                 
                 <div className="detail-row">
+                  <div className="detail-label">Uploaded By</div>
+                  <div className="detail-value">{document.uploadedBy || 'admin'}</div>
+                </div>
+                
+                {/* Keywords section - hidden but logic maintained */}
+                <div className="detail-row" style={{ display: 'none' }}>
                   <div className="detail-label">Keywords</div>
                   <div className="detail-value keywords-container">
                     <div className="keyword-tags">
@@ -617,7 +645,8 @@ const FileDetail = () => {
                   </div>
                 </div>
                 
-                <div id="keywordsEdit" className="keywords-edit">
+                {/* Keywords edit section - hidden but logic maintained */}
+                <div id="keywordsEdit" className="keywords-edit" style={{ display: 'none' }}>
                   <input
                     type="text"
                     value={keywordsInput}

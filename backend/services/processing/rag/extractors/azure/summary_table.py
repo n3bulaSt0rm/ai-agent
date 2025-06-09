@@ -20,6 +20,8 @@ from tabulate import tabulate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.documents import Document
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 # Get the project root directory for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))

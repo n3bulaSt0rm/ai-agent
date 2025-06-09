@@ -2,7 +2,7 @@ import sqlite3
 import os
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from backend.core.config import settings
 from uuid import uuid4
@@ -55,6 +55,17 @@ class MetadataDB:
                 created_at TEXT NOT NULL,
                 last_login TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1
+            )
+            ''')
+            
+            self.conn.execute('''
+            CREATE TABLE IF NOT EXISTS gmail_threads (
+                thread_id TEXT PRIMARY KEY,
+                context_summary TEXT,
+                current_draft_id TEXT,
+                last_processed_message_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             ''')
             
@@ -403,6 +414,280 @@ class MetadataDB:
         """Close the database connection."""
         if self.conn:
             self.conn.close()
+
+    # Gmail-related methods
+    
+    def get_gmail_thread_info(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get Gmail thread info from unified table.
+        
+        Args:
+            thread_id: Gmail thread ID
+            
+        Returns:
+            Thread info or None if not exists
+        """
+        try:
+            cursor = self.conn.execute('''
+                SELECT * FROM gmail_threads WHERE thread_id = ?
+            ''', (thread_id,))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                return dict(row)
+            return None
+            
+        except Exception as e:
+            print(f"Error getting Gmail thread info: {e}")
+            return None
+    
+    def upsert_gmail_thread(self, thread_id: str, context_summary: str = None, 
+                           current_draft_id: str = None,
+                           last_processed_message_id: str = None) -> bool:
+        """
+        Upsert Gmail thread info in unified table.
+        
+        Args:
+            thread_id: Gmail thread ID
+            context_summary: Context summary
+            current_draft_id: Current draft ID
+            last_processed_message_id: Last processed message ID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            now = datetime.now().isoformat()
+            
+            with self.conn:
+                # Check if thread exists
+                cursor = self.conn.execute('SELECT * FROM gmail_threads WHERE thread_id = ?', (thread_id,))
+                existing = cursor.fetchone()
+                
+                if existing:
+                    # Update existing
+                    update_fields = []
+                    params = []
+                    
+                    if context_summary is not None:
+                        update_fields.append('context_summary = ?')
+                        params.append(context_summary)
+                    if current_draft_id is not None:
+                        update_fields.append('current_draft_id = ?')
+                        params.append(current_draft_id)
+                    if last_processed_message_id is not None:
+                        update_fields.append('last_processed_message_id = ?')
+                        params.append(last_processed_message_id)
+                    
+                    update_fields.append('updated_at = ?')
+                    params.append(now)
+                    params.append(thread_id)
+                    
+                    query = f"UPDATE gmail_threads SET {', '.join(update_fields)} WHERE thread_id = ?"
+                    self.conn.execute(query, params)
+                else:
+                    # Insert new
+                    self.conn.execute('''
+                        INSERT INTO gmail_threads 
+                        (thread_id, context_summary, current_draft_id, 
+                         last_processed_message_id, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (thread_id, context_summary, current_draft_id, 
+                          last_processed_message_id, now, now))
+            
+            print(f"Upserted Gmail thread for {thread_id}")
+            return True
+            
+        except Exception as e:
+            print(f"Error upserting Gmail thread: {e}")
+            return False
+    
+    def get_gmail_thread_summaries(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        Get list of Gmail threads with context summaries.
+        
+        Args:
+            limit: Maximum number of summaries to return
+            offset: Offset for pagination
+            
+        Returns:
+            List of thread records with summaries
+        """
+        try:
+            cursor = self.conn.execute('''
+                SELECT * FROM gmail_threads 
+                WHERE context_summary IS NOT NULL
+                ORDER BY updated_at DESC 
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            
+            summaries = []
+            for row in cursor:
+                summary_data = dict(row)
+                summaries.append(summary_data)
+                
+            return summaries
+            
+        except Exception as e:
+            print(f"Error getting Gmail thread summaries: {e}")
+            return []
+
+    # Gmail Draft Tracking Methods
+    
+    def save_gmail_thread_summary(self, thread_id: str, summary: str) -> bool:
+        """
+        Save Gmail thread summary to unified threads table.
+        
+        Args:
+            thread_id: Gmail thread ID
+            summary: Thread summary content
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            return self.upsert_gmail_thread(
+                thread_id=thread_id,
+                context_summary=summary
+            )
+            
+        except Exception as e:
+            print(f"Error saving Gmail thread summary: {e}")
+            return False
+    
+    def save_gmail_draft_tracking(self, draft_id: str, thread_id: str) -> bool:
+        """
+        Save Gmail draft tracking information to unified threads table.
+        
+        Args:
+            draft_id: Gmail draft ID
+            thread_id: Thread ID
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            return self.upsert_gmail_thread(
+                thread_id=thread_id,
+                current_draft_id=draft_id
+            )
+            
+        except Exception as e:
+            print(f"Error saving Gmail draft tracking: {e}")
+            return False
+    
+
+    
+    def get_gmail_draft_tracking(self, draft_id: str = None) -> List[Dict[str, Any]]:
+        """
+        Get Gmail thread records with draft information.
+        
+        Args:
+            draft_id: Specific draft ID to get (optional)
+            
+        Returns:
+            List of thread records with draft info
+        """
+        try:
+            query = 'SELECT * FROM gmail_threads WHERE current_draft_id IS NOT NULL'
+            params = []
+            
+            if draft_id:
+                query += ' AND current_draft_id = ?'
+                params.append(draft_id)
+            
+            query += ' ORDER BY updated_at DESC'
+            
+            cursor = self.conn.execute(query, params)
+            
+            # Return simplified thread records (no mapping needed)
+            threads = []
+            for row in cursor:
+                thread_data = dict(row)
+                threads.append(thread_data)
+                
+            return threads
+            
+        except Exception as e:
+            print(f"Error getting Gmail draft tracking: {e}")
+            return []
+    
+    def delete_gmail_draft_tracking(self, draft_id: str) -> bool:
+        """
+        Clear draft info from thread record.
+        
+        Args:
+            draft_id: Gmail draft ID to clear
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with self.conn:
+                self.conn.execute('''
+                    UPDATE gmail_threads 
+                    SET current_draft_id = NULL, updated_at = ?
+                    WHERE current_draft_id = ?
+                ''', (datetime.now().isoformat(), draft_id))
+            
+            print(f"Cleared draft tracking for {draft_id}")
+            return True
+            
+        except Exception as e:
+            print(f"Error clearing Gmail draft tracking: {e}")
+            return False
+    
+    def cleanup_old_gmail_drafts(self, days: int = 7) -> bool:
+        """
+        Clean up old thread records with completed status.
+        
+        Args:
+            days: Keep records newer than this many days
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+            
+            with self.conn:
+                cursor = self.conn.execute('''
+                    UPDATE gmail_threads 
+                    SET current_draft_id = NULL
+                    WHERE updated_at < ? AND current_draft_id IS NOT NULL
+                ''', (cutoff_date,))
+                
+                cleaned_count = cursor.rowcount
+                
+            print(f"Cleaned up {cleaned_count} old draft records")
+            return True
+            
+        except Exception as e:
+            print(f"Error cleaning up old Gmail drafts: {e}")
+            return False
+    
+    def get_thread_by_draft_id(self, draft_id: str) -> Dict[str, Any]:
+        """
+        Get thread info by draft ID.
+        
+        Args:
+            draft_id: Gmail draft ID
+            
+        Returns:
+            Thread record dict or None if not found
+        """
+        try:
+            cursor = self.conn.execute('''
+                SELECT * FROM gmail_threads WHERE current_draft_id = ?
+            ''', (draft_id,))
+            
+            row = cursor.fetchone()
+            return dict(row) if row else None
+            
+        except Exception as e:
+            print(f"Error getting thread by draft ID: {e}")
+            return None
 
 # Singleton instance
 _metadata_db = None

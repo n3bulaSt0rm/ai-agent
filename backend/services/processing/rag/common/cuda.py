@@ -94,20 +94,6 @@ class CudaMemoryManager:
             # Log memory status
             usage = self.get_current_usage()
             logger.info(f"Memory cleaned - Usage: {usage['usage_percent']:.1f}% ({usage['reserved_gb']:.2f}GB)")
-    
-    def get_optimal_batch_size(self, text_lengths):
-        """Calculate optimal batch size based on text lengths"""
-        if not text_lengths:
-            return self.max_batch_size
-            
-        avg_length = sum(text_lengths) / len(text_lengths)
-        
-        if avg_length > 300:
-            return min(8, self.max_batch_size)
-        elif avg_length > 150:
-            return min(12, self.max_batch_size)
-        else:
-            return self.max_batch_size
 
 
 def setup_cuda_device(cuda_device: int = 0):

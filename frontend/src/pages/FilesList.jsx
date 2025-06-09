@@ -108,19 +108,8 @@ const FilesList = () => {
   // Add function to handle file_created_at updates
   const [fileCreatedAtInput, setFileCreatedAtInput] = useState('');
   
-  // For now, use the mock data. In a real implementation, this would be API data
+  // Format the current date as DD/MM/YYYY for the initial display
   useEffect(() => {
-    fetchDocuments(currentDocumentsPage, filterDate);
-  }, [currentDocumentsPage, searchTerm, sortOption, filterDate]);
-  
-  useEffect(() => {
-    if (showTrash) {
-      fetchTrashDocuments(currentTrashPage, trashFilterDate, trashSortOption, searchTerm);
-    }
-  }, [currentTrashPage, showTrash, trashFilterDate, trashSortOption, searchTerm]);
-  
-  useEffect(() => {
-    // Format the current date as DD/MM/YYYY for the initial display
     const today = new Date();
     const day = today.getDate().toString().padStart(2, '0');
     const month = (today.getMonth() + 1).toString().padStart(2, '0');
@@ -129,6 +118,25 @@ const FilesList = () => {
     // Don't set any initial filter, but prepare the date format
     setFilterDate('');
   }, []);
+  
+  // Fetch file counts when component is first loaded
+  useEffect(() => {
+    fetchFileCounts();
+  }, []);
+  
+  // Fetch documents from API with pagination, filtering, and sorting
+  useEffect(() => {
+    fetchDocuments(currentDocumentsPage, filterDate);
+    
+    // Also fetch file counts for both tabs on initial load
+    fetchFileCounts();
+  }, [currentDocumentsPage, searchTerm, sortOption, filterDate]);
+  
+  useEffect(() => {
+    if (showTrash) {
+      fetchTrashDocuments(currentTrashPage, trashFilterDate, trashSortOption, searchTerm);
+    }
+  }, [currentTrashPage, showTrash, trashFilterDate, trashSortOption, searchTerm]);
   
   // Fetch documents from API with pagination, filtering, and sorting
   const fetchDocuments = async (page, filterDate = null) => {
@@ -149,6 +157,14 @@ const FilesList = () => {
       );
       
       console.log("Fetched documents:", response);
+      // Log thêm về status của từng document để debug
+      if (response.files && response.files.length > 0) {
+        console.log("Document statuses:");
+        response.files.forEach(doc => {
+          console.log(`Document ID: ${doc.id}, Title: ${doc.title}, Status: ${doc.status}`);
+        });
+      }
+      
       setTotalDocuments(response.total || 0);
       setDocuments(response.files || []);
     } catch (error) {
@@ -188,6 +204,21 @@ const FilesList = () => {
     }
   };
   
+  // Add new function to fetch counts for both tabs
+  const fetchFileCounts = async () => {
+    try {
+      // Get file statistics which includes counts for both regular and trash files
+      const stats = await filesApi.getFileStats();
+      if (stats) {
+        // Update counts directly from stats
+        setTotalDocuments(stats.total || 0);
+        setTotalTrash(stats.trash || 0);
+      }
+    } catch (error) {
+      console.error('Error fetching file counts:', error);
+    }
+  };
+  
   const handleProcess = (doc) => {
     setDocumentToProcess(doc);
     
@@ -197,7 +228,7 @@ const FilesList = () => {
       try {
         const ranges = JSON.parse(doc.pages_processed_range);
         if (Array.isArray(ranges) && ranges.length > 0) {
-          existingRanges.push(...ranges);
+          existingRanges.push(...ranges); // Keep as strings like "1-5"
         }
       } catch (e) {
         console.error("Error parsing processed ranges:", e);
@@ -214,14 +245,14 @@ const FilesList = () => {
       // Find unprocessed ranges
       // Build set of processed pages
       const processedPages = new Set();
-      existingRanges.forEach(range => {
+      existingRanges.forEach(rangeStr => {
         try {
-          const [start, end] = range.split('-').map(num => parseInt(num, 10));
+          const [start, end] = rangeStr.split('-').map(num => parseInt(num, 10));
           for (let page = start; page <= end; page++) {
             processedPages.add(page);
           }
         } catch (e) {
-          console.error("Error parsing range:", range, e);
+          console.error("Error parsing range:", rangeStr, e);
         }
       });
       
@@ -312,17 +343,17 @@ const FilesList = () => {
           const existingRanges = JSON.parse(documentToProcess.pages_processed_range);
           if (Array.isArray(existingRanges)) {
             for (const newRange of pageRanges) {
-              for (const existingRange of existingRanges) {
+              for (const existingRangeStr of existingRanges) {
                 try {
-                  const [start, end] = existingRange.split('-').map(num => parseInt(num, 10));
+                  const [start, end] = existingRangeStr.split('-').map(num => parseInt(num, 10));
                   if (
                     (newRange.start <= end && newRange.end >= start)
                   ) {
-                    setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRange}`);
+                    setPageRangeError(`Range ${newRange.start}-${newRange.end} overlaps with already processed range ${existingRangeStr}`);
                     return;
                   }
                 } catch (e) {
-                  console.error("Error parsing range:", existingRange, e);
+                  console.error("Error parsing range:", existingRangeStr, e);
                 }
               }
             }
@@ -359,38 +390,86 @@ const FilesList = () => {
   };
   
   const confirmDelete = async () => {
+    if (!selectedDocument) return;
+    
+    setLoadingAction({ isLoading: true, message: 'Moving to trash...' });
+    
     try {
-      // Show loading overlay
-      setLoadingAction({ isLoading: true, message: 'Deleting document...' });
+      // Đánh dấu tài liệu là đang xóa trước khi gọi API
+      const updatedDocuments = documents.map(doc => {
+        if (doc.id === selectedDocument.id) {
+          return { ...doc, status: 'deleting' };
+        }
+        return doc;
+      });
+      setDocuments(updatedDocuments);
+      
+      // Gửi request API
+      const response = await filesApi.deleteFile(selectedDocument.id);
+      console.log("Delete API response:", response);
+      
+      // Không loại bỏ tài liệu khỏi danh sách, để nó hiển thị trạng thái "deleting" 
+      // Khi trang được tải lại hoặc API gửi sự kiện cập nhật, tài liệu sẽ tự động chuyển sang trash
+      
+      // Update file counts
+      fetchFileCounts();
+      
+      // Hide dialog
       setShowDeleteConfirm(false);
+      setSelectedDocument(null);
       
-      await filesApi.deleteFile(selectedDocument.id);
-      toast.success(`"${selectedDocument.title}" moved to trash.`);
-      
-      // Refresh documents
-      fetchDocuments(currentDocumentsPage);
+      toast.success('Document is being moved to trash');
     } catch (error) {
       console.error('Error deleting document:', error);
-      toast.error('Failed to delete document');
+      toast.error('Failed to move document to trash');
+      
+      // Restore original document status if error occurs
+      setDocuments(current => 
+        current.map(doc => doc.id === selectedDocument.id 
+          ? { ...doc, status: selectedDocument.status } 
+          : doc
+        )
+      );
     } finally {
       setLoadingAction({ isLoading: false, message: '' });
-      setSelectedDocument(null);
     }
   };
   
   const restoreDocument = async (doc) => {
+    setLoadingAction({ isLoading: true, message: 'Restoring document...' });
+    
     try {
-      // Show loading overlay
-      setLoadingAction({ isLoading: true, message: 'Restoring document...' });
+      // Đánh dấu tài liệu là đang khôi phục trước khi gọi API
+      const updatedTrashDocuments = trashDocuments.map(d => {
+        if (d.id === doc.id) {
+          return { ...d, status: 'restoring' };
+        }
+        return d;
+      });
+      setTrashDocuments(updatedTrashDocuments);
       
-      await filesApi.restoreFile(doc.id);
-      toast.success(`"${doc.title}" restored.`);
+      // Gửi request API
+      const response = await filesApi.restoreFile(doc.id);
+      console.log("Restore API response:", response);
       
-      // Refresh documents
-      fetchTrashDocuments(currentTrashPage);
+      // Không loại bỏ tài liệu khỏi danh sách trash, để nó hiển thị trạng thái "restoring"
+      // Khi trang được tải lại hoặc API gửi sự kiện cập nhật, tài liệu sẽ tự động chuyển sang all documents
+      
+      // Update file counts
+      fetchFileCounts();
+      
+      toast.success('Document is being restored');
     } catch (error) {
       console.error('Error restoring document:', error);
       toast.error('Failed to restore document');
+      
+      // Restore original document status if error occurs
+      setTrashDocuments(current => 
+        current.map(d => d.id === doc.id 
+          ? { ...d, status: doc.status } 
+          : d
+        )
+      );
     } finally {
       setLoadingAction({ isLoading: false, message: '' });
     }
@@ -412,47 +491,33 @@ const FilesList = () => {
   // Handle file upload
   const handleUpload = async () => {
     if (!selectedFile) {
-      console.error('No file selected for upload');
       toast.error('Please select a file to upload');
       return;
     }
     
+    setLoadingAction({ isLoading: true, message: 'Uploading file, please wait...' });
+    
     try {
-      console.log('FilesList - Uploading file:', selectedFile.name);
-      console.log('FilesList - File object type:', selectedFile instanceof File ? 'File object' : typeof selectedFile);
-      console.log('FilesList - File metadata:', {
-        name: selectedFile.name,
-        size: selectedFile.size,
-        type: selectedFile.type,
-        createdAt: selectedFile.fileCreatedAt,
-        keywords: selectedFile.keywords
-      });
+      // Call API to upload file
+      const uploadedFile = await filesApi.uploadFile(selectedFile, selectedFile.description, selectedFile.fileCreatedAt, selectedFile.keywords);
       
-      // Show loading overlay
-      setLoadingAction({ isLoading: true, message: 'Uploading file...' });
+      // Add file to documents list
+      setDocuments([uploadedFile, ...documents]);
+      
+      // Reset selected file
+      setSelectedFile(null);
+      
+      // Hide modal
       setShowUploadModal(false);
       
-      // Pastikan kita mengirimkan keywords yang tepat ke API
-      const keywords = selectedFile.keywords || '';
+      // Update file counts
+      fetchFileCounts();
       
-      const response = await filesApi.uploadFile(
-        selectedFile, 
-        selectedFile.description || 'Uploaded document',
-        selectedFile.fileCreatedAt,
-        keywords
-      );
-      
-      toast.success(`"${selectedFile.name}" uploaded successfully.`);
-      
-      // Refresh documents
-      fetchDocuments(1);
-      setCurrentDocumentsPage(1);
-      
-      // Close modal and reset state
-      setSelectedFile(null);
+      // Show success message
+      toast.success('File uploaded successfully');
     } catch (error) {
       console.error('Error uploading file:', error);
-      toast.error('Failed to upload file: ' + (error.message || 'Unknown error'));
+      toast.error('Failed to upload file');
     } finally {
       setLoadingAction({ isLoading: false, message: '' });
     }
@@ -474,7 +539,29 @@ const FilesList = () => {
             Processing
           </span>
         );
+      case 'preparing':
+        return (
+          <span className="status-badge preparing">
+            <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />
+            Preparing
+          </span>
+        );
+      case 'deleting':
+        return (
+          <span className="status-badge deleting">
+            <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />
+            Deleting
+          </span>
+        );
+      case 'restoring':
+        return (
+          <span className="status-badge restoring">
+            <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />
+            Restoring
+          </span>
+        );
       case 'pending_upload':
+      case 'pending':
         return (
           <span className="status-badge pending">
             <ClockIcon className="w-4 h-4 mr-1" />
@@ -509,12 +596,18 @@ const FilesList = () => {
     if (showTrashView) {
       console.log("Fetching trash documents on toggle");
       setCurrentTrashPage(1);
-      // Explicitly fetch trash documents when toggling to trash view
-      setTimeout(() => {
-        fetchTrashDocuments(1, trashFilterDate, trashSortOption);
-      }, 0);
+      // Only fetch trash content if needed, but don't reset the count
+      if (trashDocuments.length === 0) {
+        setTimeout(() => {
+          fetchTrashDocuments(1, trashFilterDate, trashSortOption);
+        }, 0);
+      }
     } else {
       setCurrentDocumentsPage(1);
+      // Refetch documents only if needed
+      if (documents.length === 0) {
+        fetchDocuments(1, filterDate);
+      }
     }
   };
   
@@ -976,7 +1069,7 @@ const FilesList = () => {
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
                               </svg>
                             </button>
-                            {doc.status === 'pending_upload' && (
+                            {doc.status === 'pending_upload' || doc.status === 'pending' ? (
                               <button 
                                 className="action-icon process-btn" 
                                 onClick={() => handleProcess(doc)}
@@ -986,7 +1079,7 @@ const FilesList = () => {
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
                                 </svg>
                               </button>
-                            )}
+                            ) : null}
                             <button 
                               className="action-icon link-btn" 
                               onClick={() => copyLink(doc)}
@@ -1021,7 +1114,7 @@ const FilesList = () => {
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
                               </svg>
                             </button>
-                            {doc.status !== 'processing' && (
+                            {doc.status !== 'processing' && doc.status !== 'preparing' && doc.status !== 'deleting' && doc.status !== 'restoring' && (
                               <button 
                                 className="action-icon delete-btn" 
                                 onClick={() => handleDelete(doc)}
@@ -1234,7 +1327,8 @@ const FilesList = () => {
                   </div>
                 )}
                 
-                <div className="detail-section keywords-section">
+                {/* Keywords section - hidden but logic maintained */}
+                <div className="detail-section keywords-section" style={{ display: 'none' }}>
                   <h4 className="detail-section-title">Keywords</h4>
                   <div className="keyword-tags">
                     {fileToView.keywords && fileToView.keywords.length > 0 ? (
@@ -1300,7 +1394,7 @@ const FilesList = () => {
                   <EyeIcon className="w-5 h-5 mr-2" />
                   View Document
                 </a>
-                {fileToView.status === 'pending_upload' && (
+                {fileToView.status === 'pending_upload' || fileToView.status === 'pending' ? (
                   <button 
                     className="btn-primary"
                     onClick={() => {
@@ -1311,7 +1405,7 @@ const FilesList = () => {
                     <ArrowPathIcon className="w-5 h-5 mr-2" />
                     Process Document
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
           </div>

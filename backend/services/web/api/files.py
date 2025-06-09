@@ -101,7 +101,7 @@ async def upload_file(
             "updatedAt": current_time,
             "uuid": unique_id,
             "object_url": public_url,  # Include public URL in response
-            "status": "pending_upload",
+            "status": "pending",  # Sử dụng giá trị status đúng như trong database
             "description": description,
             "keywords": keyword_list,
             "pages": pdf_pages,
@@ -331,14 +331,6 @@ async def list_files(
                 formatted_file["deletedDate"] = file_data.get("updated_at", file_data["upload_at"])
                 formatted_file["deletedBy"] = file_data.get("uploaded_by", "admin")
             
-            # Map status values to what frontend expects
-            if formatted_file["status"] == "processed":
-                formatted_file["status"] = "processed"
-            elif formatted_file["status"] == "processing":
-                formatted_file["status"] = "processing"
-            elif formatted_file["status"] != "deleted":
-                formatted_file["status"] = "pending_upload"
-            
             response_files.append(formatted_file)
         
         # Return response with pagination info
@@ -460,13 +452,7 @@ async def get_file(file_id: int):
             "pages_processed_range": file.get("pages_processed_range")
         }
         
-        # Map status values to what frontend expects
-        if formatted_file["status"] == "processed":
-            formatted_file["status"] = "processed"
-        elif formatted_file["status"] == "processing":
-            formatted_file["status"] = "processing"
-        else:
-            formatted_file["status"] = "pending_upload"
+        # Không thực hiện mapping status nữa, sử dụng giá trị nguyên gốc từ database
         
         return formatted_file
     except HTTPException:
@@ -650,8 +636,8 @@ async def delete_file(file_id: int):
         # Save current status for potential restore
         previous_status = file["status"]
         
-        # Update status to deleted
-        db.update_pdf_status(file_id, "deleted", previous_status=previous_status)
+        # Update status to deleting (not directly to deleted)
+        db.update_pdf_status(file_id, "deleting", previous_status=previous_status)
         
         # Get UUID from file
         file_uuid = file.get("uuid")
@@ -667,8 +653,8 @@ async def delete_file(file_id: int):
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
         return {
-            "message": f"File {file_id} marked as deleted",
-            "status": "deleted",
+            "message": f"File {file_id} is being moved to trash",
+            "status": "deleting",
             "previous_status": previous_status
         }
     except HTTPException:
@@ -691,11 +677,12 @@ async def restore_file(file_id: int):
         if file["status"] != "deleted":
             raise HTTPException(status_code=400, detail="File is not deleted")
         
-        # Restore to previous status if available
-        new_status = file.get("previous_status") or "pending"
+        # Get previous status if available for future update through webhook
+        new_status = "restoring"
+        previous_status = file.get("previous_status") or "pending"
         
-        # Update status
-        db.update_pdf_status(file_id, new_status)
+        # Update status to restoring first
+        db.update_pdf_status(file_id, new_status, previous_status=previous_status)
         
         # Get UUID from file
         file_uuid = file.get("uuid")
@@ -706,14 +693,16 @@ async def restore_file(file_id: int):
                 "file_id": file_uuid,
                 "file_path": file["object_url"],
                 "action": "restore",
+                "previous_status": previous_status, 
                 "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
             }
             
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
         return {
-            "message": f"File {file_id} restored to {new_status} status",
-            "status": new_status
+            "message": f"File {file_id} restoration in progress",
+            "status": new_status,
+            "target_status": previous_status
         }
     except HTTPException:
         raise

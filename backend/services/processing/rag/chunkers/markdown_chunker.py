@@ -66,7 +66,7 @@ class MarkdownChunker:
         
         serializable_chunks = []
         for i, chunk in enumerate(header_splits):
-            content = chunk.page_content.replace("\n", " ")
+            content = chunk.page_content
             chunk_data = {
                 "chunk_id": i + 1,
                 "content": content,

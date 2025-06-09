@@ -219,8 +219,10 @@ const filesApi = {
   // Get file statistics
   getFileStats: async () => {
     try {
-      console.log("Fetching stats from:", `${API_URL}/files/stats`);
-      const response = await apiClient.get('/files/stats');
+      // Add timestamp to URL to avoid cache
+      const timestamp = new Date().getTime();
+      console.log("Fetching stats from:", `${API_URL}/files/stats?_=${timestamp}`);
+      const response = await apiClient.get(`/files/stats?_=${timestamp}`);
       console.log("Stats API response:", response.data);
       return response.data;
     } catch (error) {

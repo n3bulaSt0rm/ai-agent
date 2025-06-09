@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     RABBITMQ_PASSWORD: str = Field(default="Q07Fb5SHeW_U9GbpNA0ojPL5osTGoWse")
     RABBITMQ_VHOST: str = Field(default="afupjdbk")
     
+    # Redis settings for dramatiq task queue
+    REDIS_HOST: str = Field(default="localhost")
+    REDIS_PORT: int = Field(default=6379)
+    REDIS_DB: int = Field(default=0)
+    REDIS_PASSWORD: str = Field(default="", description="Redis password (optional)")
+    
     # Topic/exchange names
     PDF_PROCESSING_TOPIC: str = Field(default="pdf-processing-topic")
     
@@ -58,22 +64,38 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION_NAME: str = Field(default="vietnamese_chunks_test")
     
     # Processing settings
-    EMBEDDING_MODEL: str = Field(default="sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+    EMBEDDING_MODEL: str = Field(default="AITeamVN/Vietnamese_Embedding_v2")
     CHUNK_SIZE: int = Field(default=1000)
     CHUNK_OVERLAP: int = Field(default=200)
     PROCESSING_THREADS: int = Field(default=2)
+    
+    # Chunker configuration
+    CHUNKER_TYPE: str = Field(default="recursive", description="Type of chunker to use: 'semantic' or 'recursive'")
     SEMANTIC_CHUNKER_THRESHOLD: float = Field(default=0.3)
-    SEMANTIC_CHUNKER_MODEL: str = Field(default="bkai-foundation-models/vietnamese-bi-encoder")
+    DENSE_MODEL_NAME: str = Field(default="AITeamVN/Vietnamese_Embedding_v2", description="Dense embedding model name")
+    SPARSE_MODEL_NAME: str = Field(default="Qdrant/bm25", description="Sparse embedding model name")
+    RERANKER_MODEL_NAME: str = Field(default="AITeamVN/Vietnamese_Reranker", description="Reranker model name")
+    VECTOR_SIZE: int = Field(default=1024, description="Size of vector embeddings")
+    RECURSIVE_CHUNKER_SIZE: int = Field(default=1800)
+    RECURSIVE_CHUNKER_OVERLAP: int = Field(default=220)
+    RECURSIVE_CHUNKER_MIN_LENGTH: int = Field(default=50)       
+    RECURSIVE_CHUNKER_MAX_SEQ_LENGTH: int = Field(default=2048)
     QDRANT_BATCH_SIZE: int = Field(default=8)
     
-    # Gmail API settings
-    GMAIL_TOKEN_PATH: str = Field(default="token.json")
-    GMAIL_POLL_INTERVAL: int = Field(default=60)  # Seconds
+    # Gmail settings
+    GMAIL_TOKEN_PATH: str = Field(default="D:/Project/DATN_HUST/ai-agent/secret/dev/token.json")
+    GMAIL_POLL_INTERVAL: int = Field(default=30, description="Gmail API polling interval in seconds")
+    GMAIL_EMAIL_ADDRESS: str = Field(default="", description="Gmail email address for identifying sent emails")
     
     # DeepSeek API settings
     DEEPSEEK_API_KEY: str = Field(default="")
     DEEPSEEK_API_URL: str = Field(default="https://api.deepseek.com/v1/chat/completions", description="DeepSeek API endpoint")
     DEEPSEEK_MODEL: str = Field(default="deepseek-chat")
+    
+    # Email monitoring settings
+    DRAFT_CHECK_INTERVAL: int = Field(default=240, description="Draft checking interval in seconds (4 minutes)")
+    EMAIL_CHECK_INTERVAL: int = Field(default=600, description="Email checking interval in seconds (10 minutes)")
+    MONITORING_SLEEP_INTERVAL: int = Field(default=60, description="Monitoring loop sleep interval in seconds (1 minute)")
     
     # Logging settings
     LOG_LEVEL: str = Field(default="INFO")
