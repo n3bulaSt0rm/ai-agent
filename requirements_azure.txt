@@ -13,6 +13,7 @@ langchain-core>=0.1.20
 langchain-deepseek
 langchain_qdrant
 langchain_core.memory
+langchain_google_genai
 langchain-community>=0.0.20
 langchain-text-splitters>=0.0.1
 python-dotenv>=1.0.0

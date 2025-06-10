@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     GMAIL_TOKEN_PATH: str = Field(default="D:/Project/DATN_HUST/ai-agent/secret/dev/token.json")
     GMAIL_POLL_INTERVAL: int = Field(default=30, description="Gmail API polling interval in seconds")
     GMAIL_EMAIL_ADDRESS: str = Field(default="", description="Gmail email address for identifying sent emails")
+    GOOGLE_API_KEY: str = Field(default="")
     
     # DeepSeek API settings
     DEEPSEEK_API_KEY: str = Field(default="")

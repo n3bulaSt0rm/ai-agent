@@ -126,8 +126,9 @@ class VietnameseEmbeddingModule:
         # Preprocess texts
         processed_texts = [self._preprocess_text(text) for text in texts]
         
+        dense_embeddings = None
         try:
-            # Generate dense embeddings
+            # Generate dense embeddings with proper memory management
             with torch.no_grad():
                 dense_embeddings = self.dense_model.encode(
                     processed_texts,
@@ -139,6 +140,9 @@ class VietnameseEmbeddingModule:
                 
                 if isinstance(dense_embeddings, torch.Tensor):
                     dense_embeddings = dense_embeddings.cpu().numpy()
+                    # Clear GPU memory immediately
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
             
             # Generate sparse embeddings and combine with dense
             results = []

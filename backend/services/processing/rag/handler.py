@@ -4,17 +4,20 @@ import json
 import asyncio
 import logging
 import time
+
 from datetime import datetime, time as datetime_time
 from typing import Dict, Any, List, Optional, Tuple
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 
 # Gmail API
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
 
 # Import Vietnamese Query Module
 from backend.services.processing.rag.retrievers.qdrant_retriever import VietnameseQueryModule, create_query_module
@@ -26,25 +29,44 @@ from backend.services.processing.rag.draft_monitor import EmailDraftMonitor
 
 from backend.services.processing.rag.utils import create_deepseek_client, DeepSeekAPIClient
 
+# Gemini Multimodal Processor import  
+from backend.services.processing.rag.extractors.gemini.multimodal_processor import GeminiMultimodalProcessor
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
+
 class GmailHandler:
     """
-    Handler for monitoring Gmail inbox, processing emails, and generating responses.
+    Gmail handler that processes emails with multimodal content using Gemini
     """
     
-    def __init__(self, token_path: str = None, poll_interval: int = None):
+    def __init__(self, token_path: str = None, use_gemini: bool = True):
         """
-        Initialize Gmail handler with authentication.
+        Initialize Gmail handler.
         
         Args:
-            token_path: Path to the token JSON file
-            poll_interval: Interval in seconds between inbox checks
+            token_path: Path to the token JSON file  
+            use_gemini: Whether to use Gemini for image processing
         """
         self.token_path = token_path or settings.GMAIL_TOKEN_PATH
         self.service = None
-        self.user_id = 'me'  # 'me' refers to the authenticated user
+        self.user_id = 'me'
+        self.use_gemini = use_gemini
+        self.current_message_id = None  # Track current message for attachment downloading
+        
+        # Initialize Gemini processor if enabled
+        if self.use_gemini:
+            try:
+                self.gemini_processor = GeminiMultimodalProcessor()
+                logger.info("Gemini enabled for image processing")
+            except Exception as e:
+                logger.warning(f"Gemini init failed: {e}")
+                self.use_gemini = False
+                self.gemini_processor = None
+        else:
+            self.gemini_processor = None
         
         self.deepseek_api_key = settings.DEEPSEEK_API_KEY
         self.deepseek_api_url = settings.DEEPSEEK_API_URL
@@ -247,36 +269,201 @@ class GmailHandler:
             logger.error(f"Unexpected error: {e}")
             return []
             
-    def _get_email_body(self, message: Dict[str, Any]) -> str:
+    def _get_email_body(self, message: Dict) -> str:
         """
-        Extract email body from Gmail message.
+        Extract email body from Gmail message, including processing images with Gemini
         
         Args:
             message: Gmail message object
             
         Returns:
-            Email body text
+            Processed email body content
         """
-        body = ""
-        
         try:
-            if 'parts' in message['payload']:
-                # Multipart message
-                for part in message['payload']['parts']:
-                    if part['mimeType'] == 'text/plain':
-                        if 'data' in part['body']:
-                            body = base64.urlsafe_b64decode(
-                                part['body']['data']).decode('utf-8')
-                            break
-            elif 'body' in message['payload'] and 'data' in message['payload']['body']:
-                # Simple message
-                body = base64.urlsafe_b64decode(
-                    message['payload']['body']['data']).decode('utf-8')
+            # Store current message ID for attachment downloading
+            self.current_message_id = message.get('id')
+            
+            payload = message.get('payload', {})
+            
+            # Extract text content
+            email_text = self._extract_text_content(payload)
+            
+            # Extract image attachments 
+            image_attachments = self._extract_image_attachments(payload)
+            
+            # Process images with Gemini if available
+            if image_attachments and self.use_gemini and self.gemini_processor:
+                try:
+                    logger.info(f"Processing {len(image_attachments)} images with Gemini")
+                    return self.gemini_processor.process_email_with_images(
+                        email_text, image_attachments, "comprehensive"
+                    )
+                except Exception as e:
+                    logger.error(f"Gemini error: {e}")
+            
+            # Add image info if present
+            if image_attachments:
+                image_info = f"\n\n=== ẢNH ĐÍNH KÈM ===\n"
+                for i, img in enumerate(image_attachments, 1):
+                    image_info += f"📷 Ảnh {i}: {img.get('filename', f'image_{i}')}\n"
+                return email_text + image_info
+            
+            return email_text
+            
         except Exception as e:
             logger.error(f"Error extracting email body: {e}")
-                
-        return body
+            return "[Lỗi trích xuất nội dung email]"
+    
+    def _extract_image_attachments(self, payload: Dict) -> List[Dict[str, Any]]:
+        """
+        Extract image attachments from email payload
         
+        Args:
+            payload: Email payload from Gmail API
+            
+        Returns:
+            List of image attachment data
+        """
+        attachments = []
+        
+        def process_part(part):
+            """Recursively process email parts to find images"""
+            mime_type = part.get('mimeType', '')
+            filename = part.get('filename', '')
+            
+            logger.debug(f"Processing part: mimeType={mime_type}, filename={filename}")
+            
+            # Check if this part is an image
+            if mime_type.startswith('image/'):
+                logger.info(f"Found image part: {mime_type}, {filename}")
+                attachment_data = self._get_attachment_data(part)
+                if attachment_data:
+                    attachments.append(attachment_data)
+                    logger.info(f"Successfully extracted image: {attachment_data['filename']} ({attachment_data['size']} bytes)")
+                else:
+                    logger.warning(f"Failed to extract image data for: {filename}")
+            
+            # Process nested parts
+            if 'parts' in part:
+                for subpart in part['parts']:
+                    process_part(subpart)
+        
+        # Start processing from the main payload
+        if 'parts' in payload:
+            for part in payload['parts']:
+                process_part(part)
+        else:
+            # Single part email
+            process_part(payload)
+        
+        logger.info(f"Found {len(attachments)} image attachments")
+        return attachments
+    
+    def _get_attachment_data(self, part: Dict) -> Optional[Dict[str, Any]]:
+        """
+        Get attachment data from email part
+        
+        Args:
+            part: Email part containing attachment
+            
+        Returns:
+            Attachment data dictionary or None
+        """
+        try:
+            body = part.get('body', {})
+            attachment_id = body.get('attachmentId')
+            
+            if not attachment_id:
+                # Inline attachment
+                data = body.get('data')
+                if data:
+                    import base64
+                    image_data = base64.urlsafe_b64decode(data)
+                    
+                    filename = part.get('filename', 'inline_image')
+                    mime_type = part.get('mimeType', 'image/jpeg')
+                    
+                    return {
+                        'data': image_data,
+                        'filename': filename,
+                        'mime_type': mime_type,
+                        'size': len(image_data)
+                    }
+            else:
+                # External attachment - download it
+                try:
+                    attachment = self.service.users().messages().attachments().get(
+                        userId=self.user_id,
+                        messageId=self.current_message_id,  # Need to track current message
+                        id=attachment_id
+                    ).execute()
+                    
+                    data = attachment.get('data')
+                    if data:
+                        import base64
+                        image_data = base64.urlsafe_b64decode(data)
+                        
+                        filename = part.get('filename', 'attachment_image')
+                        mime_type = part.get('mimeType', 'image/jpeg')
+                        
+                        logger.info(f"Downloaded external attachment: {filename} ({len(image_data)} bytes)")
+                        
+                        return {
+                            'data': image_data,
+                            'filename': filename,
+                            'mime_type': mime_type,
+                            'size': len(image_data)
+                        }
+                except Exception as e:
+                    logger.error(f"Error downloading external attachment {attachment_id}: {e}")
+                    return None
+            
+        except Exception as e:
+            logger.error(f"Error getting attachment data: {e}")
+            return None
+    
+    def _extract_text_content(self, payload: Dict) -> str:
+        """Extract text content from email payload"""
+        body_text = ""
+        
+        def extract_text_from_part(part):
+            nonlocal body_text
+            mime_type = part.get('mimeType', '')
+            body = part.get('body', {})
+            
+            if mime_type == 'text/plain':
+                data = body.get('data', '')
+                if data:
+                    import base64
+                    decoded_text = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+                    body_text += decoded_text + "\n"
+            
+            elif mime_type == 'text/html':
+                data = body.get('data', '')
+                if data:
+                    import base64
+                    html_content = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+                    # Convert HTML to plain text (basic implementation)
+                    import re
+                    text = re.sub('<[^<]+?>', '', html_content)
+                    text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                    body_text += text + "\n"
+            
+            # Process nested parts
+            if 'parts' in part:
+                for subpart in part['parts']:
+                    extract_text_from_part(subpart)
+        
+        # Extract text from all parts
+        if 'parts' in payload:
+            for part in payload['parts']:
+                extract_text_from_part(part)
+        else:
+            # Single part email
+            extract_text_from_part(payload)
+        
+        return body_text.strip()
+    
     def mark_as_read(self, message_id: str) -> None:
         """
         Mark an email as read.
