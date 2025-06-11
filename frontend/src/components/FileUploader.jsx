@@ -11,7 +11,7 @@ import '../styles/LoadingOverlay.css';
  */
 const FileUploader = ({ 
   onFileSelected, 
-  acceptedFormats = ['.pdf', '.docx', '.txt'], 
+  acceptedFormats = ['.pdf', '.txt'], 
   maxSize = 20,
   buttonText = "Upload Document"
 }) => {

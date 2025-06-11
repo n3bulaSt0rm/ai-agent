@@ -57,7 +57,7 @@ temp/
 .pytest_cache/
 .coverage
 htmlcov/
-
+.cursorignore
 secret/
 
 # Data files
@@ -65,3 +65,4 @@ data/
 qdrant_data
 secret
 token.json
+interactive-feedback-mcp

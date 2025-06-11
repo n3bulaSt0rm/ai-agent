@@ -319,6 +319,22 @@
   color: var(--warning-color);
 }
 
+/* User management status badges */
+.status-badge.admin {
+  background-color: rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+}
+
+.status-badge.user {
+  background-color: rgba(107, 114, 128, 0.1);
+  color: #6b7280;
+}
+
+.status-badge.banned {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
 .action-buttons {
   display: flex;
   gap: 8px;
@@ -970,4 +986,63 @@
   color: #94a3b8;
   font-style: italic;
   font-size: 0.875rem;
+}
+
+/* Additional styles for user management */
+.stat-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 1.5rem;
+}
+
+.stat-icon {
+  margin-bottom: 1rem;
+  padding: 12px;
+  border-radius: 12px;
+  background-color: rgba(79, 70, 229, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-content h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-color);
+}
+
+.stat-content p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-light);
+  font-weight: 500;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem;
+  color: var(--text-light);
+}
+
+.loading .loading-spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid #f3f4f6;
+  border-top: 3px solid var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
 }

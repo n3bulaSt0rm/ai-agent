@@ -7,13 +7,15 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import FilesList from './pages/FilesList';
 import FileDetail from './pages/FileDetail';
-import SearchPage from './pages/SearchPage';
+import IntelligentSearch from './pages/IntelligentSearch';
+import UserManagement from './pages/UserManagement';
 
 // Components
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import ProtectedRoute from './components/ProtectedRoute';
-import { AuthProvider } from './hooks/useAuth';
+import AuthCallback from './components/AuthCallback';
+import { AuthProvider, useAuth } from './hooks/useAuth';
 
 // Create a client for react-query
 const queryClient = new QueryClient({
@@ -24,6 +26,36 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Role-based redirect component
+const RoleBasedRedirect = () => {
+  const { user } = useAuth();
+  
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  if (user.role === 'admin') {
+    return <Navigate to="/dashboard" replace />;
+  } else {
+    return <Navigate to="/search" replace />;
+  }
+};
+
+// Admin-only route wrapper
+const AdminRoute = ({ children }) => {
+  const { user } = useAuth();
+  
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  if (user.role !== 'admin') {
+    return <Navigate to="/search" replace />;
+  }
+  
+  return children;
+};
 
 // 404 Not Found Page Component
 const NotFound = () => (
@@ -49,28 +81,42 @@ function App() {
             <main className="content">
               <Routes>
                 <Route path="/login" element={<Login />} />
+                <Route path="/auth/callback" element={<AuthCallback />} />
                 <Route path="/dashboard" element={
                   <ProtectedRoute>
-                    <Dashboard />
+                    <AdminRoute>
+                      <Dashboard />
+                    </AdminRoute>
                   </ProtectedRoute>
                 } />
                 <Route path="/documents" element={
                   <ProtectedRoute>
-                    <FilesList />
+                    <AdminRoute>
+                      <FilesList />
+                    </AdminRoute>
                   </ProtectedRoute>
                 } />
                 <Route path="/files" element={<Navigate to="/documents" replace />} />
                 <Route path="/files/:id" element={
                   <ProtectedRoute>
-                    <FileDetail />
+                    <AdminRoute>
+                      <FileDetail />
+                    </AdminRoute>
                   </ProtectedRoute>
                 } />
                 <Route path="/search" element={
                   <ProtectedRoute>
-                    <SearchPage />
+                    <IntelligentSearch />
                   </ProtectedRoute>
                 } />
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/users" element={
+                  <ProtectedRoute>
+                    <AdminRoute>
+                      <UserManagement />
+                    </AdminRoute>
+                  </ProtectedRoute>
+                } />
+                <Route path="/" element={<RoleBasedRedirect />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </main>

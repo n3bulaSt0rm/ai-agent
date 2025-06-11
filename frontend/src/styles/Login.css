@@ -358,6 +358,73 @@ input:focus {
   opacity: 0.8;
 }
 
+/* Divider */
+.divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 1.5rem 0 1rem 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+}
+
+.divider span {
+  padding: 0 1rem;
+  background: transparent;
+}
+
+/* Google Login Button */
+.google-login-button {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 1rem;
+  border-radius: var(--border-radius);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  transition: all 0.3s ease;
+  margin-bottom: 1rem;
+}
+
+.google-login-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+
+.google-login-button:active {
+  transform: translateY(0);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+
+.google-login-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+  transform: none !important;
+}
+
+.google-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
 .loading-overlay {
   position: fixed;
   top: 0;
@@ -473,4 +540,139 @@ input:focus {
 
 .normal-input::placeholder {
   color: #555 !important;
+}
+
+/* Banned User Modal Styles */
+.modal-overlay-banned {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  backdrop-filter: blur(5px);
+  animation: fadeIn 0.3s ease;
+}
+
+.modal-content-banned {
+  background: linear-gradient(135deg, #1a1a2e 0%, #2c1810 100%);
+  border-radius: 16px;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 75, 75, 0.3);
+  overflow: hidden;
+  animation: slideUp 0.3s ease;
+}
+
+.modal-header-banned {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem;
+  background: rgba(255, 75, 75, 0.1);
+  border-bottom: 1px solid rgba(255, 75, 75, 0.2);
+}
+
+.banned-icon {
+  font-size: 2rem;
+  margin-right: 1rem;
+}
+
+.modal-header-banned h2 {
+  color: #ff6b6b;
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.close-btn-banned {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1.5rem;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.close-btn-banned:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.modal-body-banned {
+  padding: 1.5rem;
+  color: white;
+  line-height: 1.6;
+}
+
+.modal-body-banned p {
+  margin: 0 0 1rem 0;
+}
+
+.modal-body-banned strong {
+  color: #ff6b6b;
+}
+
+.contact-info {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1rem;
+  border-radius: 8px;
+  margin-top: 1rem;
+  border-left: 3px solid #4F46E5;
+}
+
+.contact-info p {
+  margin: 0.5rem 0;
+}
+
+.contact-info p:first-child {
+  color: #4F46E5;
+  font-weight: 600;
+}
+
+.modal-footer-banned {
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  justify-content: center;
+}
+
+.btn-understand {
+  background: linear-gradient(135deg, #ff6b6b, #ee5a5a);
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+}
+
+.btn-understand:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4);
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 } 

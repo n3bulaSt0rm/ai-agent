@@ -50,21 +50,19 @@ const Footer = () => {
             </ul>
           </div>
           
-          <div className="footer-column contact-column">
+          <div className="footer-column">
             <h3>Contact Us</h3>
-            <div className="contact-info">
-              <div className="contact-item">
-                <EnvelopeIcon className="w-4 h-4 contact-icon" />
-                <p>contact@aiagent.com</p>
-              </div>
-              <div className="contact-item">
-                <PhoneIcon className="w-4 h-4 contact-icon" />
-                <p>+84 123 456 789</p>
-              </div>
-              <div className="contact-item">
-                <MapPinIcon className="w-4 h-4 contact-icon" />
-                <p>Hanoi, Vietnam</p>
-              </div>
+            <div className="contact-item">
+              <EnvelopeIcon className="w-4 h-4 contact-icon" />
+              <p>contact@aiagent.com</p>
+            </div>
+            <div className="contact-item">
+              <PhoneIcon className="w-4 h-4 contact-icon" />
+              <p>+84 123 456 789</p>
+            </div>
+            <div className="contact-item">
+              <MapPinIcon className="w-4 h-4 contact-icon" />
+              <p>Hanoi, Vietnam</p>
             </div>
           </div>
         </div>

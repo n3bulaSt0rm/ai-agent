@@ -165,9 +165,9 @@ const Dashboard = () => {
   
   return (
     <div className="page-container dashboard-page wide-dashboard">
-      <div className="dashboard-header">
-        <div className="header-content">
-          <h1 className="no-underline">Dashboard</h1>
+      <div className="page-header">
+        <div>
+          <h1>Dashboard</h1>
           <p>Monitor your document management system</p>
         </div>
         <div className="header-actions">

@@ -19,22 +19,25 @@ from datetime import datetime
 
 # Third-party imports
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-# Configure logging once at the very beginning
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Configure logging once at the very beginning - only if not already configured
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
 logger = logging.getLogger(__name__)
 
 # Local imports
 from backend.core.config import settings
 from backend.services.messaging import create_subscription, publish_message
-from backend.services.processing.rag.handler import start_gmail_monitoring
+from backend.services.processing.rag.handler import start_gmail_monitoring, GmailHandler
+
 from backend.services.processing.rag.extractors.azure.main import process_document as azure_process_document
 from backend.services.processing.rag.extractors.azure.summary_table import process_file
 from backend.services.processing.rag.chunkers.markdown_chunker import MarkdownChunker
@@ -42,6 +45,7 @@ from backend.services.processing.rag.chunkers.chunker_adapter import UniversalCh
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.services.processing.rag.common.qdrant import ChunkData
 from backend.services.processing.rag.common.cuda import CudaMemoryManager
+from backend.services.processing.rag.extractors.gemini.text_processor import process_text_document_from_url as gemini_process_text_from_url
 
 # Constants
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -49,6 +53,14 @@ DATA_DIR.mkdir(exist_ok=True)
 
 # Database path
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "admin.db"
+
+# Status constants
+class FileStatus:
+    PENDING = "pending"
+    PROCESSING = "processing"
+    PROCESSED = "processed"
+    ERROR = "error"
+    DELETED = "deleted"
 
 # Get configuration from settings
 PROCESSING_PORT = settings.PROCESSING_PORT
@@ -71,11 +83,14 @@ class ModuleSingletons:
     universal_chunker = None
     embedding_module = None
     cuda_memory_manager = None
+    gmail_handler = None
 
 # Create the singletons instance that will be used throughout the application
 modules = ModuleSingletons()
 
-# Create FastAPI app
+class TextProcessRequest(BaseModel):
+    text: str
+
 app = FastAPI(
     title="Document Processing Service",
     description="Service for processing PDF documents and extracting semantic information",
@@ -85,7 +100,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,6 +121,48 @@ async def health_check():
 async def root():
     """Root endpoint"""
     return {"message": "Processing Service Running"}
+
+@app.post("/process-text")
+async def process_text_endpoint(request: TextProcessRequest):
+    """
+    Process text content and return comprehensive information with sources
+    
+    Args:
+        request: TextProcessRequest containing the text to process
+        
+    Returns:
+        JSON response with the processed result
+    """
+    try:
+        if not request.text or not request.text.strip():
+            raise HTTPException(status_code=400, detail="Text content is required")
+        
+        if modules.gmail_handler is None:
+            logger.error("Gmail handler not initialized")
+            raise HTTPException(status_code=500, detail="Text processing service not available - query module initialization failed")
+        
+        if not hasattr(modules.gmail_handler, 'query_module') or modules.gmail_handler.query_module is None:
+            logger.error("Query module not initialized in Gmail handler")
+            raise HTTPException(status_code=500, detail="Query module not available")
+        
+        logger.info(f"Processing text request with {len(request.text)} characters")
+        
+        # Process the text using the Gmail handler's Vietnamese Query Module
+        response = modules.gmail_handler.process_text_with_vietnamese_query_module(request.text)
+        
+        if not response:
+            raise HTTPException(status_code=500, detail="Failed to process text")
+        
+        return {
+            "status": "success",
+            "response": response,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing text: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 def update_file_status(file_id: str, status: str, page_range: str = None) -> bool:
@@ -171,7 +228,7 @@ def update_file_status(file_id: str, status: str, page_range: str = None) -> boo
 
 def extract_text(file_path: str, page_range: Optional[str] = None) -> str:
     """
-    Extract text from document using Azure Document Intelligence.
+    Extract text from PDF document using Azure Document Intelligence.
     
     Args:
         file_path: Path or URL to the document
@@ -183,7 +240,7 @@ def extract_text(file_path: str, page_range: Optional[str] = None) -> str:
     Raises:
         ValueError: If text extraction fails
     """
-    logger.info(f"Extracting text from document: {file_path}")
+    logger.info(f"Extracting text from PDF document: {file_path}")
     markdown_content = azure_process_document(file_path, page_range)
     
     if not markdown_content:
@@ -259,7 +316,8 @@ def process_markdown_chunks(
 def create_chunk_objects(
     chunks: List[Dict[str, Any]],
     file_id: str,
-    file_created_at: Optional[str] = None
+    file_created_at: Optional[str] = None,
+    source: Optional[str] = None
 ) -> List[ChunkData]:
     """
     Convert chunks to ChunkData objects.
@@ -268,6 +326,7 @@ def create_chunk_objects(
         chunks: List of chunks
         file_id: ID of the file
         file_created_at: File creation timestamp
+        source: Source file path
         
     Returns:
         List[ChunkData]: List of ChunkData objects
@@ -289,7 +348,8 @@ def create_chunk_objects(
             content=chunk["content"],
             file_id=file_id,
             parent_chunk_id=parent_chunk_id,
-            file_created_at=file_created_at
+            file_created_at=file_created_at,
+            source=source
         )
         
         chunk_objects.append(chunk_obj)
@@ -311,20 +371,16 @@ def embed_and_store_chunks(
     
     return len(chunk_objects)
 
-async def process_document(message_data: Dict[str, Any]) -> None:
+async def process_pdf_document(message_data: Dict[str, Any]) -> None:
+    """Process PDF documents using Azure Document Intelligence"""
     file_id = message_data.get("file_id")
     file_path = message_data.get("file_path")
     page_range = message_data.get("page_range")
     file_created_at = message_data.get("file_created_at")
 
-    if not file_id or not file_path:
-        logger.error("Missing file_id or file_path in message data")
-        return
+    logger.info(f"Started processing PDF document: {file_id} at {file_path}")
     
-    logger.info(f"Started processing document: {file_id} at {file_path}")
-    
-    # Set status to processing and track page range
-    update_file_status(file_id, "processing", page_range)
+    update_file_status(file_id, FileStatus.PROCESSING, page_range)
 
     try:
         # Step 1: Extract text from document
@@ -340,19 +396,107 @@ async def process_document(message_data: Dict[str, Any]) -> None:
         processed_chunks = process_markdown_chunks(markdown_chunks, file_id)
         
         # Step 5: Create chunk objects
-        chunk_objects = create_chunk_objects(processed_chunks, file_id, file_created_at)
+        chunk_objects = create_chunk_objects(processed_chunks, file_id, file_created_at, file_path)
         
         # Step 6: Embed and store chunks
         stored_count = embed_and_store_chunks(chunk_objects, file_id)
-        logger.info(f"Successfully stored {stored_count} chunks for document {file_id}")
+        logger.info(f"Successfully stored {stored_count} chunks for PDF document {file_id}")
         
-        # Update status to processed
-        update_file_status(file_id, "processed")
-        logger.info(f"Completed processing document: {file_id}")
+        update_file_status(file_id, FileStatus.PROCESSED)
+        logger.info(f"Completed processing PDF document: {file_id}")
         
     except Exception as e:
-        logger.error(f"Error processing document: {str(e)}", exc_info=True)
-        update_file_status(file_id, "error")
+        logger.error(f"Error processing PDF document: {str(e)}", exc_info=True)
+        update_file_status(file_id, FileStatus.ERROR)
+
+async def process_txt_document(message_data: Dict[str, Any]) -> None:
+    """Process text documents using Gemini for chunking"""
+    file_id = message_data.get("file_id")
+    file_path = message_data.get("file_path")
+    file_created_at = message_data.get("file_created_at")
+
+    logger.info(f"Started processing text document: {file_id} at {file_path}")
+    
+    update_file_status(file_id, FileStatus.PROCESSING)
+
+    try:
+        logger.info("Processing text file via Gemini File API")
+        gemini_chunks = gemini_process_text_from_url(file_path, file_id)
+        
+        # Validation for gemini_chunks
+        if not gemini_chunks:
+            logger.error(f"No chunks returned from Gemini processing for file {file_id}")
+            update_file_status(file_id, FileStatus.ERROR)
+            return
+            
+        if not isinstance(gemini_chunks, list):
+            logger.error(f"Invalid chunk format returned from Gemini for file {file_id}: expected list, got {type(gemini_chunks)}")
+            update_file_status(file_id, FileStatus.ERROR)
+            return
+        
+        # Validate each chunk structure
+        for i, chunk in enumerate(gemini_chunks):
+            if not isinstance(chunk, dict):
+                logger.error(f"Invalid chunk at index {i} for file {file_id}: expected dict, got {type(chunk)}")
+                update_file_status(file_id, FileStatus.ERROR)
+                return
+                
+            if "chunk_id" not in chunk or "content" not in chunk:
+                logger.error(f"Missing required fields in chunk at index {i} for file {file_id}: {chunk.keys()}")
+                update_file_status(file_id, FileStatus.ERROR)
+                return
+                
+            if not chunk["content"] or not chunk["content"].strip():
+                logger.warning(f"Empty content in chunk at index {i} for file {file_id}")
+        
+        logger.info(f"Successfully validated {len(gemini_chunks)} chunks from Gemini")
+        
+        # Step 3: Convert Gemini chunks 
+        processed_chunks = []
+        for chunk in gemini_chunks:
+            processed_chunks.append({
+                "chunk_id": chunk["chunk_id"],
+                "content": chunk["content"],
+                "metadata": {
+                    "file_id": file_id,
+                    "parent_chunk_id": 0
+                }
+            })
+        
+        # Step 4: Create chunk objects
+        chunk_objects = create_chunk_objects(processed_chunks, file_id, file_created_at, file_path)
+        
+        # Step 5: Embed and store chunks
+        stored_count = embed_and_store_chunks(chunk_objects, file_id)
+        logger.info(f"Successfully stored {stored_count} chunks for text document {file_id}")
+        
+        # Update status to processed
+        update_file_status(file_id, FileStatus.PROCESSED)
+        logger.info(f"Completed processing text document: {file_id}")
+        
+    except Exception as e:
+        logger.error(f"Error processing text document: {str(e)}", exc_info=True)
+        update_file_status(file_id, FileStatus.ERROR)
+
+async def process_document(message_data: Dict[str, Any]) -> None:
+    """Route document processing based on content_type"""
+    file_id = message_data.get("file_id")
+    file_path = message_data.get("file_path")
+    content_type = message_data.get("content_type", "application/pdf")  
+
+    if not file_id or not file_path:
+        logger.error("Missing file_id or file_path in message data")
+        return
+    
+    logger.info(f"Processing document {file_id} with content_type: {content_type}")
+    
+    if content_type == "application/pdf":
+        await process_pdf_document(message_data)
+    elif content_type == "text/plain":
+        await process_txt_document(message_data)
+    else:
+        logger.error(f"Unsupported content_type: {content_type}")
+        update_file_status(file_id, FileStatus.ERROR)
 
 async def handle_document_deletion_status(message_data: Dict[str, Any]) -> None:
     """
@@ -392,7 +536,7 @@ async def handle_document_deletion_status(message_data: Dict[str, Any]) -> None:
                         # Save current status as previous_status and set status to 'deleted'
                         db_conn.execute(
                             "UPDATE files_management SET status = ?, previous_status = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
-                            ("deleted", current_status[0], file_id)
+                            (FileStatus.DELETED, current_status[0], file_id)
                         )
                         db_conn.commit()
                         logger.info(f"Document {file_id} marked as deleted, previous status saved: {current_status[0]}")
@@ -421,14 +565,54 @@ async def handle_document_deletion_status(message_data: Dict[str, Any]) -> None:
                         logger.info(f"Document {file_id} restored to status: {restore_status}")
                     else:
                         # Fallback to 'pending' if no previous status
-                        update_file_status(file_id, "pending")
+                        update_file_status(file_id, FileStatus.PENDING)
                         logger.info(f"Document {file_id} restored to default status: pending")
             else:
                 logger.error(f"Failed to update is_deleted flag in Qdrant for file {file_id}")
                 
     except Exception as e:
         logger.error(f"Error processing {action} for document {file_id}: {e}")
-        update_file_status(file_id, "error")
+        update_file_status(file_id, FileStatus.ERROR)
+
+async def handle_metadata_update(message_data: Dict[str, Any]) -> None:
+    """
+    Handle metadata update operations for processed files.
+    
+    Args:
+        message_data: Message data containing metadata update instructions
+    """
+    file_id = message_data.get("file_id")
+    action = message_data.get("action")
+    
+    if not file_id:
+        logger.error("Missing file_id in metadata update message")
+        return
+        
+    logger.info(f"Processing metadata update for document {file_id}, action: {action}")
+    
+    try:
+        qdrant_manager = modules.embedding_module.qdrant_manager
+        
+        if action == "update_metadata":
+            # Update file_created_at in Qdrant
+            file_created_at = message_data.get("file_created_at")
+            if file_created_at:
+                result = qdrant_manager.update_file_created_at_batch(file_id, file_created_at)
+                if result:
+                    logger.info(f"Successfully updated file_created_at for document {file_id}")
+                else:
+                    logger.error(f"Failed to update file_created_at in Qdrant for file {file_id}")
+                    
+        elif action == "update_keywords":
+            # Keywords update doesn't require Qdrant changes, just log
+            keywords = message_data.get("keywords", "")
+            logger.info(f"Keywords update processed for document {file_id}: {keywords}")
+            
+        else:
+            logger.error(f"Unsupported metadata update action: {action}")
+                
+    except Exception as e:
+        logger.error(f"Error processing metadata update for document {file_id}: {e}")
 
 async def handle_processing_message(message_data: Dict[str, Any]) -> None:
     """
@@ -447,6 +631,8 @@ async def handle_processing_message(message_data: Dict[str, Any]) -> None:
             "process": process_document,
             "delete": handle_document_deletion_status,
             "restore": handle_document_deletion_status,
+            "update_metadata": handle_metadata_update,
+            "update_keywords": handle_metadata_update,
         }
         
         # Get the handler for this action
@@ -463,7 +649,7 @@ async def handle_processing_message(message_data: Dict[str, Any]) -> None:
         
         # Try to update error status if we have a file_id
         if file_id != "unknown":
-            update_file_status(file_id, "error")
+            update_file_status(file_id, FileStatus.ERROR)
 
 def initialize_modules():
     """Initialize all required modules"""
@@ -502,9 +688,23 @@ def initialize_modules():
             sparse_model_name=settings.SPARSE_MODEL_NAME,
             reranker_model_name=settings.RERANKER_MODEL_NAME,
             vector_size=VECTOR_SIZE,
-            memory_manager=modules.cuda_memory_manager  # Pass shared memory manager
+            memory_manager=modules.cuda_memory_manager  
         )
         logger.info("Vietnamese Embedding Module initialized successfully")
+        
+        modules.gmail_handler = GmailHandler()
+        
+        # Only initialize the query module, don't authenticate Gmail
+        try:
+            modules.gmail_handler._init_query_module()
+            logger.info("Gmail Handler query module initialized successfully for text processing")
+        except Exception as e:
+            logger.error(f"Failed to initialize query module: {e}")
+            # Don't fail startup completely, but log the error
+            modules.gmail_handler = None
+            raise Exception(f"Critical: Query module initialization failed: {e}")
+        
+        logger.info("Gmail Handler initialized successfully for text processing")
         
         return True
     except Exception as e:
@@ -530,10 +730,12 @@ async def startup():
         )
         logger.info("Processing subscription created successfully")
         
-        # Start the Gmail monitoring service
-        logger.info("Starting Gmail monitoring service...")
-        asyncio.create_task(start_gmail_monitoring())
-        logger.info("Gmail monitoring service started successfully")
+        # Start Gmail monitoring with dependency injection
+        logger.info("Starting Gmail monitoring with shared handler...")
+        asyncio.create_task(start_gmail_monitoring(gmail_handler=modules.gmail_handler))
+        logger.info("Gmail monitoring started successfully")
+        
+
         
         logger.info("All startup tasks completed successfully")
         

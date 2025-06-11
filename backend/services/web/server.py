@@ -10,7 +10,7 @@ from datetime import datetime
 import json
 
 from backend.core.config import settings
-from backend.services.web.api import auth, files
+from backend.services.web.api import auth, files, search, users
 from backend.db.metadata import get_metadata_db
 
 # Configure logging
@@ -58,6 +58,8 @@ async def add_timing_header(request: Request, call_next):
 # Include API routers
 app.include_router(auth.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
+app.include_router(search.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
 
 # Static files and templates setup
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -83,61 +85,6 @@ async def health_check():
         "version": "1.0.0"
     }
 
-# Root endpoint redirects to admin UI
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    """Serve the admin UI"""
-    # In a real implementation, we would create a proper index.html template
-    # For now, redirect to the admin UI
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="0;url=/admin">
-        <title>Redirecting...</title>
-    </head>
-    <body>
-        <p>Redirecting to admin interface...</p>
-    </body>
-    </html>
-    """
-
-# Admin UI endpoint
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_ui(request: Request):
-    """Serve the admin UI"""
-    # In a real implementation, this would be a proper SPA
-    # For now, just return a placeholder
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>AI Agent Admin</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body { padding-top: 20px; }
-            .loading { display: none; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>AI Agent Admin Interface</h1>
-            <p>This is a placeholder for the React-based admin UI.</p>
-            <p>For now, you can use the API directly:</p>
-            <ul>
-                <li><a href="/docs" target="_blank">API Documentation</a></li>
-            </ul>
-        </div>
-        <script>
-            // In a real implementation, this would load the React app
-            console.log("Admin UI loaded");
-        </script>
-    </body>
-    </html>
-    """
 
 # Webhook endpoint for status updates
 @app.post("/api/webhook/status-update")

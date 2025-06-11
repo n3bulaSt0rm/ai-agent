@@ -9,22 +9,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 
-
-def sanitize_filename(filename):
-    """Làm sạch tên file để tránh ký tự không hợp lệ"""
-    if not filename or filename.isspace():
-        return "untitled"
-
-    # Thay thế các ký tự không hợp lệ bằng dấu gạch dưới
-    filename = re.sub(r'[<>:"/\\|?*\r\n\t]', '_', filename)
-    filename = filename.strip()
-
-    # Giới hạn độ dài tên file
-    if len(filename) > 100:
-        filename = filename[:100]
-    return filename or "untitled"
-
-
 def process_single_email(args):
     """Xử lý một email đơn lẻ - để sử dụng với multiprocessing"""
     email_data, output_dir, i, filter_year = args
@@ -70,8 +54,7 @@ def process_single_email(args):
                 pass
 
         # Tạo tên file
-        clean_subject = sanitize_filename(subject)
-        filename = f"{clean_subject}.eml"
+        filename = f"{subject}.eml"
         file_path = os.path.join(output_dir, filename)
 
         # Xử lý trường hợp trùng tên file
@@ -293,15 +276,11 @@ def get_mbox_info_fast(mbox_file_path):
 
 if __name__ == "__main__":
     mbox_file = r"D:\Project\DATN_HUST\ai-agent\data\All mail Including Spam and Trash"  
-    output_directory = r"D:\Project\mbox\email"  # Thư mục để lưu các email
+    output_directory = r"D:\Project\DATN_HUST\ai-agent\data\eml"  
 
-    # Số thread để xử lý song song (có thể điều chỉnh theo máy)
-    num_threads = 14  # Tăng lên nếu máy mạnh, giảm xuống nếu máy yếu
-
-    # Lọc email từ năm 2021 trở đi
+    num_threads = 14 
     filter_year = 2021
 
-    # Kiểm tra xem file mbox có tồn tại không
     if not os.path.exists(mbox_file):
         print(f"File không tồn tại: {mbox_file}")
         print("Vui lòng cập nhật đường dẫn đến file mbox của bạn")

@@ -201,13 +201,14 @@ class VietnameseQueryModule:
                 "metadata": {
                     "file_id": payload.get("file_id", "unknown"),
                     "parent_chunk_id": payload.get("parent_chunk_id", 0),
-                    "file_created_at": payload.get("file_created_at", None)
+                    "file_created_at": payload.get("file_created_at", None),
+                    "source": payload.get("source", None)
                 }
             }
             
             # Add any additional metadata from payload
             for key, value in payload.items():
-                if key not in ["chunk_id", "content", "file_id", "parent_chunk_id", "file_created_at"]:
+                if key not in ["chunk_id", "content", "file_id", "parent_chunk_id", "file_created_at", "source", "is_deleted"]:
                     result["metadata"][key] = value
             
             final_results.append(result)
@@ -224,12 +225,13 @@ class VietnameseQueryModule:
             metadata = {
                 "file_id": hit.payload.get("file_id", "unknown"),
                 "parent_chunk_id": hit.payload.get("parent_chunk_id", 0),
-                "file_created_at": hit.payload.get("file_created_at", None)
+                "file_created_at": hit.payload.get("file_created_at", None),
+                "source": hit.payload.get("source", None)
             }
             
             # Add any additional metadata fields from the payload
             for key, value in hit.payload.items():
-                if key not in ["chunk_id", "content", "file_id", "parent_chunk_id", "file_created_at"]:
+                if key not in ["chunk_id", "content", "file_id", "parent_chunk_id", "file_created_at", "source"]:
                     metadata[key] = value
             
             # Format result
@@ -448,6 +450,115 @@ Email cần phân tích:
             
         except Exception as e:
             logger.error(f"Email processing error: {e}")
+            if self.memory_manager:
+                self.memory_manager.cleanup_memory()
+            return [], None
+
+    def extract_queries_from_text(self, text_content: str) -> tuple[List[str], object]:
+        """Extract queries from general text content (no summary needed)"""
+        if not text_content or not text_content.strip():
+            return ["Không có nội dung"], None
+        
+        first_line_fallback = text_content.strip().split('\n')[0][:100]
+        
+        conversation = None
+        try:
+            system_message = "Bạn là trợ lý AI chuyên nghiệp hỗ trợ phòng công tác sinh viên. Bạn sẽ giúp phân tích text, tìm kiếm thông tin và trả lời câu hỏi."
+            conversation = self.deepseek.start_conversation(system_message)
+            logger.info("Successfully started DeepSeek conversation for text processing")
+        except Exception as e:
+            logger.error(f"Failed to start DeepSeek conversation: {e}")
+            return [first_line_fallback], None
+        
+        try:
+            prompt = f"""Hãy phân tích đoạn văn bản sau và trích xuất tất cả các câu hỏi/yêu cầu thông tin có trong đó.
+
+Trả về kết quả dưới dạng JSON với format sau:
+{{
+    "queries": [
+        {{
+            "query": "câu hỏi được viết một cách rõ ràng"
+        }}
+    ]
+}}
+
+Lưu ý:
+- Mỗi query phải là một câu hỏi hoàn chỉnh và rõ ràng
+- Đảm bảo đúng chính tả tiếng Việt
+- Chỉ trả về JSON, không thêm giải thích
+- Nếu không có câu hỏi rõ ràng, hãy tạo ra những câu hỏi có thể liên quan đến nội dung
+
+Văn bản cần phân tích:
+{text_content}"""
+            
+            response_text = self.deepseek.send_message(
+                conversation=conversation, 
+                message=prompt,
+                temperature=0.4,
+                max_tokens=4000,
+                error_default=None
+            )
+            
+            if not response_text or not response_text.strip():
+                logger.warning("DeepSeek returned empty response for text, using fallback")
+                return [first_line_fallback], conversation
+            
+            response_text = response_text.strip()
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            
+            parsed_response = json.loads(response_text.strip())
+            
+            queries = [item.get("query", "").strip() 
+                      for item in parsed_response.get("queries", []) 
+                      if item.get("query", "").strip()]
+            
+            logger.info(f"Successfully extracted {len(queries)} queries from text")
+            return (queries if queries else [first_line_fallback]), conversation
+                
+        except Exception as e:
+            logger.error(f"Error in DeepSeek text processing: {e}")
+            return [first_line_fallback], conversation
+
+    def process_text(self, text_content: str) -> tuple[List[EmailQueryResult], object]:
+        """Process general text content with multiple queries and return results with conversation"""
+        if not text_content or not text_content.strip():
+            return [], None
+        
+        try:
+            queries, conversation = self.extract_queries_from_text(text_content)
+            if not queries:
+                return [], conversation
+            
+            results = []
+            for query in queries:
+                try:
+                    query_results = self.process_single_query(query)
+                    results.append(EmailQueryResult(
+                        original_query=query,
+                        results=query_results,
+                        total_found=len(query_results),
+                        context_summary=""  # No summary needed for text processing
+                    ))
+                except Exception as e:
+                    logger.error(f"Error processing query '{query}': {e}")
+                    results.append(EmailQueryResult(
+                        original_query=query,
+                        results=[],
+                        total_found=0,
+                        context_summary=""
+                    ))
+            
+            # Clean up resources
+            if self.memory_manager:
+                self.memory_manager.cleanup_memory()
+            
+            return results, conversation
+            
+        except Exception as e:
+            logger.error(f"Text processing error: {e}")
             if self.memory_manager:
                 self.memory_manager.cleanup_memory()
             return [], None

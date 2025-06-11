@@ -375,7 +375,17 @@ const FilesList = () => {
       await filesApi.processFile(documentToProcess.id, { page_ranges: pageRangesStrings });
       toast.success(`Processing "${documentToProcess.title}"...`);
       
-      fetchDocuments(currentDocumentsPage); // Refresh list after processing starts
+      // Immediately update the document status to 'preparing' in the local state
+      setDocuments(current => 
+        current.map(doc => doc.id === documentToProcess.id 
+          ? { ...doc, status: 'preparing' } 
+          : doc
+        )
+      );
+      
+      setTimeout(() => {
+        fetchDocuments(currentDocumentsPage);
+      }, 1500);
     } catch (error) {
       console.error(`Error processing document: ${error}`);
       toast.error('Failed to process document');
@@ -568,10 +578,21 @@ const FilesList = () => {
             Pending
           </span>
         );
-      default:
+      case 'error':
         return (
-          <span className="status-badge">
-            Unknown
+          <span className="status-badge error">
+            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Error
+          </span>
+        );
+      default:
+        console.warn('Unknown status received:', status);
+        return (
+          <span className="status-badge pending">
+            <ClockIcon className="w-4 h-4 mr-1" />
+            {status || 'Pending'}
           </span>
         );
     }
@@ -1240,7 +1261,7 @@ const FilesList = () => {
             <div className="modal-body">
               <FileUploader 
                 onFileSelected={handleFileSelected}
-                acceptedFormats={['.pdf', '.docx', '.doc']}
+                acceptedFormats={['.pdf', '.txt']}
                 maxSize={10}
               />
             </div>

@@ -98,8 +98,18 @@ class Settings(BaseSettings):
     EMAIL_CHECK_INTERVAL: int = Field(default=600, description="Email checking interval in seconds (10 minutes)")
     MONITORING_SLEEP_INTERVAL: int = Field(default=60, description="Monitoring loop sleep interval in seconds (1 minute)")
     
+    # Background Worker settings for Gmail Thread Processing
+    WORKER_CRON_EXPRESSION: str = Field(default="0 1 */14 * *", description="Cron expression for worker schedule (default: 1 AM every 14 days)")
+    EMAIL_QA_COLLECTION: str = Field(default="email_qa", description="Qdrant collection name for email embeddings")
+    WORKER_DAYS_LOOKBACK: int = Field(default=30, description="Number of days to look back for gmail threads to process")
+    
     # Logging settings
     LOG_LEVEL: str = Field(default="INFO")
+    
+    # Google OAuth settings
+    GOOGLE_CLIENT_ID: str = Field(default="", description="Google OAuth Client ID")
+    GOOGLE_CLIENT_SECRET: str = Field(default="", description="Google OAuth Client Secret")
+    FRONTEND_URL: str = Field(default="http://localhost:3000", description="Frontend URL for OAuth redirects")
     
     # Azure Document Intelligence API settings
     AZURE_DOCUMENT_ENDPOINT: str = Field(default="", description="Azure Document Intelligence endpoint")

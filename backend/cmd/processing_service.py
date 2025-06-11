@@ -34,7 +34,6 @@ def start_processing_service():
 
 if __name__ == "__main__":
     try:
-        # Không cần asyncio.run() nữa vì uvicorn tự xử lý event loop
         start_processing_service()
     except KeyboardInterrupt:
         logger.info("Processing service stopped by user")

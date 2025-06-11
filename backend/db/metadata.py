@@ -1,7 +1,6 @@
 import sqlite3
 import os
 import json
-import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from backend.core.config import settings
@@ -47,16 +46,29 @@ class MetadataDB:
             self.conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
                 username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                full_name TEXT,
-                email TEXT,
+                password TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
                 created_at TEXT NOT NULL,
-                last_login TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1
+                updated_at TEXT,
+                updated_by TEXT,
+                is_banned INTEGER DEFAULT 0
             )
             ''')
+            
+            # Check if columns exist, add them if not
+            cursor = self.conn.execute("PRAGMA table_info(users)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'updated_at' not in columns:
+                self.conn.execute('ALTER TABLE users ADD COLUMN updated_at TEXT')
+            
+            if 'updated_by' not in columns:
+                self.conn.execute('ALTER TABLE users ADD COLUMN updated_by TEXT')
+                
+            if 'is_banned' not in columns:
+                self.conn.execute('ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0')
             
             self.conn.execute('''
             CREATE TABLE IF NOT EXISTS gmail_threads (
@@ -64,22 +76,22 @@ class MetadataDB:
                 context_summary TEXT,
                 current_draft_id TEXT,
                 last_processed_message_id TEXT,
+                embedding_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             ''')
             
             # Create default admin user if not exists
-            cursor = self.conn.execute("SELECT * FROM users WHERE username = ?", (settings.ADMIN_USERNAME,))
-            if not cursor.fetchone():
-                # Hash the password
-                password_hash = hashlib.sha256(settings.ADMIN_PASSWORD.encode()).hexdigest()
-                
+            result = self.conn.execute("SELECT * FROM users WHERE username = ?", (settings.ADMIN_USERNAME,))
+            if not result.fetchone():
+                admin_uuid = str(uuid4())
+                now = datetime.now().isoformat()
                 self.conn.execute(
                     '''INSERT INTO users 
-                       (username, password_hash, role, created_at) 
-                       VALUES (?, ?, ?, ?)''',
-                    (settings.ADMIN_USERNAME, password_hash, 'admin', datetime.now().isoformat())
+                       (uuid, username, password, role, created_at, updated_at, updated_by) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (admin_uuid, settings.ADMIN_USERNAME, settings.ADMIN_PASSWORD, 'admin', now, now, 'system')
                 )
     
     def verify_user(self, username: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
@@ -94,32 +106,26 @@ class MetadataDB:
             Tuple of (authenticated, user_data)
         """
         try:
-            # Hash the provided password
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
-            
             # Query the user
-            cursor = self.conn.execute(
-                "SELECT * FROM users WHERE username = ? AND is_active = 1", 
+            result = self.conn.execute(
+                "SELECT * FROM users WHERE username = ?", 
                 (username,)
             )
-            user = cursor.fetchone()
+            user = result.fetchone()
             
             if not user:
                 return False, None
                 
             user_data = dict(user)
             
-            # Check if password matches
-            if user_data['password_hash'] == password_hash:
-                # Update last login time
-                with self.conn:
-                    self.conn.execute(
-                        "UPDATE users SET last_login = ? WHERE id = ?",
-                        (datetime.now().isoformat(), user_data['id'])
-                    )
-                
-                # Remove password hash from returned data
-                user_data.pop('password_hash', None)
+            # Check if user is banned
+            if user_data.get('is_banned', 0) == 1:
+                return False, None
+            
+            # Check if password matches (direct comparison for simplicity)
+            if user_data['password'] == password:
+                # Remove password from returned data
+                user_data.pop('password', None)
                 
                 return True, user_data
             
@@ -127,6 +133,245 @@ class MetadataDB:
         except Exception as e:
             print(f"Error verifying user: {e}")
             return False, None
+    
+    def create_or_get_google_user(self, email: str) -> Dict[str, Any]:
+        """
+        Create a new user from Google OAuth or get existing user.
+        
+        Args:
+            email: User's email from Google OAuth
+            
+        Returns:
+            User data dict
+        """
+        try:
+            # Check if user exists
+            result = self.conn.execute(
+                "SELECT * FROM users WHERE username = ?", 
+                (email,)
+            )
+            user = result.fetchone()
+            
+            if user:
+                # User exists, check if banned
+                user_data = dict(user)
+                if user_data.get('is_banned', 0) == 1:
+                    raise Exception(f"User {email} is banned")
+                
+                user_data.pop('password', None)
+                return user_data
+            
+            # Create new user
+            user_uuid = str(uuid4())
+            now = datetime.now().isoformat()
+            
+            with self.conn:
+                self.conn.execute(
+                    '''INSERT INTO users 
+                       (uuid, username, password, role, created_at, updated_at, updated_by) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (user_uuid, email, '', 'user', now, now, '')  
+                )
+                
+                # Get the created user
+                result = self.conn.execute(
+                    "SELECT * FROM users WHERE username = ?", 
+                    (email,)
+                )
+                user = result.fetchone()
+                user_data = dict(user)
+                user_data.pop('password', None)
+                
+                print(f"Created new Google user: {email}")
+                return user_data
+                
+        except Exception as e:
+            print(f"Error creating/getting Google user: {e}")
+            raise
+    
+    def get_all_users(self, limit: int = 100, offset: int = 0, search_query: str = None) -> List[Dict[str, Any]]:
+        """
+        Get all users with pagination and optional search.
+        
+        Args:
+            limit: Maximum number of users to return
+            offset: Offset for pagination
+            search_query: Search query for username
+            
+        Returns:
+            List of user records (without passwords)
+        """
+        try:
+            query = "SELECT id, uuid, username, role, created_at, updated_at, updated_by FROM users"
+            params = []
+            
+            if search_query:
+                query += " WHERE username LIKE ?"
+                params.append(f"%{search_query}%")
+            
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            
+            result = self.conn.execute(query, params)
+            
+            users = []
+            for row in result:
+                user_data = dict(row)
+                users.append(user_data)
+                
+            return users
+        except Exception as e:
+            print(f"Error getting all users: {e}")
+            return []
+    
+    def get_users_count(self, search_query: str = None) -> int:
+        """
+        Get total count of users.
+        
+        Args:
+            search_query: Search query for username
+            
+        Returns:
+            Count of users
+        """
+        try:
+            query = "SELECT COUNT(*) FROM users"
+            params = []
+            
+            if search_query:
+                query += " WHERE username LIKE ?"
+                params.append(f"%{search_query}%")
+            
+            result = self.conn.execute(query, params)
+            return result.fetchone()[0]
+        except Exception as e:
+            print(f"Error getting users count: {e}")
+            return 0
+    
+    def update_user_role(self, user_id: int, new_role: str, updated_by: str) -> bool:
+        """
+        Update user role.
+        
+        Args:
+            user_id: ID of the user
+            new_role: New role ('admin' or 'user')
+            updated_by: Username of who made the update
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if new_role not in ['admin', 'user']:
+                return False
+                
+            now = datetime.now().isoformat()
+            
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE users SET role = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+                    (new_role, now, updated_by, user_id)
+                )
+            
+            print(f"Updated user {user_id} role to {new_role} by {updated_by}")
+            return True
+        except Exception as e:
+            print(f"Error updating user role: {e}")
+            return False
+    
+    def ban_user(self, user_id: int, banned_by: str) -> bool:
+        """
+        Ban a user.
+        
+        Args:
+            user_id: ID of the user to ban
+            banned_by: Username of who performed the ban
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Check if user exists and is not the default admin
+            result = self.conn.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            user = result.fetchone()
+            
+            if not user:
+                return False
+            
+            # Prevent banning of default admin
+            if user['username'] == settings.ADMIN_USERNAME:
+                print(f"Cannot ban default admin user: {settings.ADMIN_USERNAME}")
+                return False
+            
+            now = datetime.now().isoformat()
+            
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE users SET is_banned = 1, updated_at = ?, updated_by = ? WHERE id = ?",
+                    (now, banned_by, user_id)
+                )
+            
+            print(f"Banned user {user_id} ({user['username']}) by {banned_by}")
+            return True
+        except Exception as e:
+            print(f"Error banning user: {e}")
+            return False
+    
+    def unban_user(self, user_id: int, unbanned_by: str) -> bool:
+        """
+        Unban a user.
+        
+        Args:
+            user_id: ID of the user to unban
+            unbanned_by: Username of who performed the unban
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Check if user exists
+            result = self.conn.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            user = result.fetchone()
+            
+            if not user:
+                return False
+            
+            now = datetime.now().isoformat()
+            
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE users SET is_banned = 0, updated_at = ?, updated_by = ? WHERE id = ?",
+                    (now, unbanned_by, user_id)
+                )
+            
+            print(f"Unbanned user {user_id} ({user['username']}) by {unbanned_by}")
+            return True
+        except Exception as e:
+            print(f"Error unbanning user: {e}")
+            return False
+    
+    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a user by ID.
+        
+        Args:
+            user_id: ID of the user
+            
+        Returns:
+            User data dict (without password) or None if not found
+        """
+        try:
+            result = self.conn.execute(
+                "SELECT id, uuid, username, role, created_at, updated_at, updated_by FROM users WHERE id = ?", 
+                (user_id,)
+            )
+            user = result.fetchone()
+            
+            if user:
+                return dict(user)
+            return None
+        except Exception as e:
+            print(f"Error getting user by ID: {e}")
+            return None
     
     def add_pdf_file(self, filename: str, file_size: int, 
                      content_type: str, object_url: str, description: str = None, 
@@ -155,7 +400,7 @@ class MetadataDB:
             uuid = str(uuid4())
             
         with self.conn:
-            cursor = self.conn.execute(
+            result = self.conn.execute(
                 '''INSERT INTO files_management 
                    (uuid, filename, file_size, content_type, object_url,
                     upload_at, description, file_created_at, updated_at, pages, status, keywords) 
@@ -163,7 +408,7 @@ class MetadataDB:
                 (uuid, filename, file_size, content_type, object_url,
                  now, description, file_created_at or now, now, pages, 'pending', keywords)
             )
-            file_id = cursor.lastrowid
+            file_id = result.lastrowid
             
             return file_id
     
@@ -194,10 +439,10 @@ class MetadataDB:
         query += ' ORDER BY upload_at DESC LIMIT ? OFFSET ?'
         params.extend([limit, offset])
         
-        cursor = self.conn.execute(query, params)
+        result = self.conn.execute(query, params)
         
         files = []
-        for row in cursor:
+        for row in result:
             file_data = dict(row)
             files.append(file_data)
             
@@ -224,8 +469,8 @@ class MetadataDB:
             query += ' WHERE status != ?'
             params.append(exclude_status)
         
-        cursor = self.conn.execute(query, params)
-        return cursor.fetchone()[0]
+        result = self.conn.execute(query, params)
+        return result.fetchone()[0]
     
     def get_pdf_file(self, file_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -237,8 +482,8 @@ class MetadataDB:
         Returns:
             File record or None if not found
         """
-        cursor = self.conn.execute('SELECT * FROM files_management WHERE id = ?', (file_id,))
-        row = cursor.fetchone()
+        result = self.conn.execute('SELECT * FROM files_management WHERE id = ?', (file_id,))
+        row = result.fetchone()
         
         if not row:
             return None
@@ -341,10 +586,10 @@ class MetadataDB:
         
         params.extend([limit, offset])
         
-        cursor = self.conn.execute(sql_query, tuple(params))
+        result = self.conn.execute(sql_query, tuple(params))
         
         files = []
-        for row in cursor:
+        for row in result:
             file_data = dict(row)
             files.append(file_data)
             
@@ -360,11 +605,11 @@ class MetadataDB:
         Returns:
             File record or None if not found
         """
-        cursor = self.conn.execute(
+        result = self.conn.execute(
             'SELECT * FROM files_management WHERE uuid = ?', 
             (file_uuid,)
         )
-        row = cursor.fetchone()
+        row = result.fetchone()
         
         if not row:
             return None
@@ -428,11 +673,11 @@ class MetadataDB:
             Thread info or None if not exists
         """
         try:
-            cursor = self.conn.execute('''
+            result = self.conn.execute('''
                 SELECT * FROM gmail_threads WHERE thread_id = ?
             ''', (thread_id,))
             
-            row = cursor.fetchone()
+            row = result.fetchone()
             
             if row:
                 return dict(row)
@@ -444,7 +689,8 @@ class MetadataDB:
     
     def upsert_gmail_thread(self, thread_id: str, context_summary: str = None, 
                            current_draft_id: str = None,
-                           last_processed_message_id: str = None) -> bool:
+                           last_processed_message_id: str = None,
+                           embedding_id: str = None) -> bool:
         """
         Upsert Gmail thread info in unified table.
         
@@ -462,8 +708,8 @@ class MetadataDB:
             
             with self.conn:
                 # Check if thread exists
-                cursor = self.conn.execute('SELECT * FROM gmail_threads WHERE thread_id = ?', (thread_id,))
-                existing = cursor.fetchone()
+                result = self.conn.execute('SELECT * FROM gmail_threads WHERE thread_id = ?', (thread_id,))
+                existing = result.fetchone()
                 
                 if existing:
                     # Update existing
@@ -479,6 +725,9 @@ class MetadataDB:
                     if last_processed_message_id is not None:
                         update_fields.append('last_processed_message_id = ?')
                         params.append(last_processed_message_id)
+                    if embedding_id is not None:
+                        update_fields.append('embedding_id = ?')
+                        params.append(embedding_id)
                     
                     update_fields.append('updated_at = ?')
                     params.append(now)
@@ -491,10 +740,10 @@ class MetadataDB:
                     self.conn.execute('''
                         INSERT INTO gmail_threads 
                         (thread_id, context_summary, current_draft_id, 
-                         last_processed_message_id, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                         last_processed_message_id, embedding_id, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (thread_id, context_summary, current_draft_id, 
-                          last_processed_message_id, now, now))
+                          last_processed_message_id, embedding_id, now, now))
             
             print(f"Upserted Gmail thread for {thread_id}")
             return True
@@ -515,7 +764,7 @@ class MetadataDB:
             List of thread records with summaries
         """
         try:
-            cursor = self.conn.execute('''
+            result = self.conn.execute('''
                 SELECT * FROM gmail_threads 
                 WHERE context_summary IS NOT NULL
                 ORDER BY updated_at DESC 
@@ -523,7 +772,7 @@ class MetadataDB:
             ''', (limit, offset))
             
             summaries = []
-            for row in cursor:
+            for row in result:
                 summary_data = dict(row)
                 summaries.append(summary_data)
                 
@@ -599,11 +848,11 @@ class MetadataDB:
             
             query += ' ORDER BY updated_at DESC'
             
-            cursor = self.conn.execute(query, params)
+            result = self.conn.execute(query, params)
             
             # Return simplified thread records (no mapping needed)
             threads = []
-            for row in cursor:
+            for row in result:
                 thread_data = dict(row)
                 threads.append(thread_data)
                 
@@ -652,13 +901,13 @@ class MetadataDB:
             cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
             
             with self.conn:
-                cursor = self.conn.execute('''
+                result = self.conn.execute('''
                     UPDATE gmail_threads 
                     SET current_draft_id = NULL
                     WHERE updated_at < ? AND current_draft_id IS NOT NULL
                 ''', (cutoff_date,))
                 
-                cleaned_count = cursor.rowcount
+                cleaned_count = result.rowcount
                 
             print(f"Cleaned up {cleaned_count} old draft records")
             return True
@@ -678,18 +927,155 @@ class MetadataDB:
             Thread record dict or None if not found
         """
         try:
-            cursor = self.conn.execute('''
+            result = self.conn.execute('''
                 SELECT * FROM gmail_threads WHERE current_draft_id = ?
             ''', (draft_id,))
             
-            row = cursor.fetchone()
+            row = result.fetchone()
             return dict(row) if row else None
             
         except Exception as e:
             print(f"Error getting thread by draft ID: {e}")
             return None
 
-# Singleton instance
+    def get_threads_to_process(self, days_lookback: int = 7) -> List[Dict[str, Any]]:
+        """
+        Get threads that need processing based on criteria.
+        
+        Args:
+            days_lookback: Number of days to look back for threads
+            
+        Returns:
+            List of thread records that need processing
+        """
+        try:
+            cutoff_date = (datetime.now() - timedelta(days=days_lookback)).isoformat()
+            
+            result = self.conn.execute('''
+                SELECT * FROM gmail_threads 
+                WHERE updated_at >= ?
+                AND (
+                    embedding_id IS NULL 
+                    OR embedding_id != (thread_id || ',' || COALESCE(last_processed_message_id, ''))
+                )
+                ORDER BY updated_at DESC
+            ''', (cutoff_date,))
+            
+            threads = []
+            for row in result:
+                thread_data = dict(row)
+                threads.append(thread_data)
+            
+            print(f"Found {len(threads)} threads to process (since {cutoff_date})")
+            return threads
+            
+        except Exception as e:
+            print(f"Error getting threads to process: {e}")
+            return []
+
+    def get_all_users_advanced(self, limit: int = 100, offset: int = 0, search_query: str = None, 
+                              sort_by: str = None, sort_order: str = "desc", date_filter: str = None) -> List[Dict[str, Any]]:
+        """
+        Get all users with advanced filtering, sorting and pagination.
+        Excludes the default admin user (username='admin').
+        
+        Args:
+            limit: Maximum number of users to return
+            offset: Offset for pagination
+            search_query: Search query for username
+            sort_by: Field to sort by (username, role, created_at)
+            sort_order: Sort order (asc, desc)
+            date_filter: Filter by creation date (YYYY-MM-DD)
+            
+        Returns:
+            List of user records (without passwords)
+        """
+        try:
+            query = "SELECT id, uuid, username, role, created_at, updated_at, updated_by, is_banned FROM users"
+            params = []
+            where_conditions = []
+            
+            # Always exclude the default admin user
+            where_conditions.append("username != ?")
+            params.append(settings.ADMIN_USERNAME)
+            
+            # Add search condition
+            if search_query:
+                where_conditions.append("username LIKE ?")
+                params.append(f"%{search_query}%")
+            
+            # Add date filter condition
+            if date_filter:
+                where_conditions.append("DATE(created_at) = ?")
+                params.append(date_filter)
+            
+            # Add WHERE clause
+            query += " WHERE " + " AND ".join(where_conditions)
+            
+            # Add sorting
+            valid_sort_fields = ["username", "role", "created_at", "updated_at"]
+            if sort_by and sort_by in valid_sort_fields:
+                order_direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+                query += f" ORDER BY {sort_by} {order_direction}"
+            else:
+                query += " ORDER BY created_at DESC"  # Default sort
+            
+            # Add pagination
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            
+            result = self.conn.execute(query, params)
+            
+            users = []
+            for row in result:
+                user_data = dict(row)
+                users.append(user_data)
+                
+            return users
+        except Exception as e:
+            print(f"Error getting users with advanced options: {e}")
+            return []
+    
+    def get_users_count_advanced(self, search_query: str = None, date_filter: str = None) -> int:
+        """
+        Get total count of users with filtering.
+        Excludes the default admin user (username='admin').
+        
+        Args:
+            search_query: Search query for username
+            date_filter: Filter by creation date (YYYY-MM-DD)
+            
+        Returns:
+            Count of users
+        """
+        try:
+            query = "SELECT COUNT(*) FROM users"
+            params = []
+            where_conditions = []
+            
+            # Always exclude the default admin user
+            where_conditions.append("username != ?")
+            params.append(settings.ADMIN_USERNAME)
+            
+            # Add search condition
+            if search_query:
+                where_conditions.append("username LIKE ?")
+                params.append(f"%{search_query}%")
+            
+            # Add date filter condition
+            if date_filter:
+                where_conditions.append("DATE(created_at) = ?")
+                params.append(date_filter)
+            
+            # Add WHERE clause
+            query += " WHERE " + " AND ".join(where_conditions)
+            
+            result = self.conn.execute(query, params)
+            return result.fetchone()[0]
+        except Exception as e:
+            print(f"Error getting users count with advanced options: {e}")
+            return 0
+
 _metadata_db = None
 
 def get_metadata_db() -> MetadataDB:

@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import '../styles/Navbar.css';
 
 const Navbar = () => {
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, logout, isAdmin, userRole } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [isScrolled, setIsScrolled] = useState(false);
@@ -51,7 +51,7 @@ const Navbar = () => {
     <nav className={`navbar ${isClient && isScrolled ? 'scrolled' : ''}`}>
       <div className="navbar-container">
         <div className="navbar-logo">
-          <Link to="/dashboard">
+          <Link to={isAdmin ? "/dashboard" : "/search"}>
             <div className="logo-text">
               <span className="primary">AI</span>
               <span className="primary">Agent</span>
@@ -60,20 +60,48 @@ const Navbar = () => {
         </div>
         
         <div className={`navbar-actions ${isMobileMenuOpen ? 'active' : ''}`}>
+          {/* Show Dashboard only for admin */}
+          {isAdmin && (
+            <Link 
+              to="/dashboard" 
+              className={`nav-link logout-button styled-button ${location.pathname === '/dashboard' ? 'active' : ''}`}
+            >
+              <i className="dashboard-icon"></i>
+              Dashboard
+            </Link>
+          )}
+          
+          {/* Show Users Management only for admin */}
+          {isAdmin && (
+            <Link 
+              to="/users" 
+              className={`nav-link logout-button styled-button ${location.pathname === '/users' ? 'active' : ''}`}
+            >
+              <i className="users-icon"></i>
+              Users
+            </Link>
+          )}
+          
+          {/* AI Search - Always visible, moved before Documents */}
           <Link 
-            to="/dashboard" 
-            className={`nav-link logout-button styled-button ${location.pathname === '/dashboard' ? 'active' : ''}`}
+            to="/search" 
+            className={`nav-link logout-button styled-button ${location.pathname === '/search' ? 'active' : ''}`}
           >
-            <i className="dashboard-icon"></i>
-            Dashboard
+            <i className="search-icon"></i>
+            AI Search
           </Link>
-          <Link 
-            to="/files" 
-            className={`nav-link logout-button styled-button ${location.pathname === '/files' ? 'active' : ''}`}
-          >
-            <i className="files-icon"></i>
-            Documents
-          </Link>
+          
+          {/* Documents - Only for admin */}
+          {isAdmin && (
+            <Link 
+              to="/files" 
+              className={`nav-link logout-button styled-button ${location.pathname === '/files' ? 'active' : ''}`}
+            >
+              <i className="files-icon"></i>
+              Documents
+            </Link>
+          )}
+          
           <button onClick={handleLogout} className="logout-button styled-button">
             <i className="logout-icon"></i>
             <span className="logout-text">Logout</span>

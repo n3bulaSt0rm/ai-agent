@@ -1,46 +1,40 @@
+import os.path
+import base64
+from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# Đường dẫn tới token.json của bạn
-token_path = r"D:\Project\DATN_HUST\ai-agent\secret\prod\token.json"
+# Load credentials from token file
+TOKEN_PATH = r"D:\Project\DATN_HUST\ai-agent\secret\prod\token.json"
+creds = Credentials.from_authorized_user_file(TOKEN_PATH, ['https://www.googleapis.com/auth/gmail.modify'])
 
-# Khởi tạo credentials từ file token
-creds = Credentials.from_authorized_user_file(
-    token_path,
-    scopes=['https://www.googleapis.com/auth/gmail.readonly']
-)
-
-# Khởi tạo service Gmail
+# Build Gmail API service
 service = build('gmail', 'v1', credentials=creds)
 
-# Lấy một email chưa đọc mới nhất trong Inbox
-results = service.users().messages().list(
-    userId='me',
-    labelIds=['INBOX', 'UNREAD'],
-    maxResults=1
-).execute()
+# Thread ID bạn đã có
+thread_id = '19755b52db9ac903'  # <- thay bằng threadId thật của bạn
 
-messages = results.get('messages', [])
+# Nội dung email draft
+to = "tunghahaha1999@gmail.com"
+subject = "Draft reply for existing thread"
+body = "This is a draft email reply for an existing thread."
 
-if not messages:
-    print("Không có email chưa đọc.")
-else:
-    msg_id = messages[0]['id']
-    message = service.users().messages().get(
-        userId='me',
-        id=msg_id,
-        format='full'
-    ).execute()
-    
-    # Trích xuất header cần thiết
-    headers = message['payload']['headers']
-    id = message['id']
-    subject = next(h['value'] for h in headers if h['name'] == 'Subject')
-    sender = next(h['value'] for h in headers if h['name'] == 'From')
-    date = next(h['value'] for h in headers if h['name'] == 'Date')
+# Tạo MIME message
+message = MIMEText(body)
+message['to'] = to
+message['subject'] = subject
 
-    print("Email chưa đọc mới nhất:")
-    print(f"Từ: {sender}")
-    print(f"Chủ đề: {subject}")
-    print(f"Ngày: {date}")
-    print(f"ID: {id}")
+# Encode message thành base64
+raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+# Tạo draft gắn với thread
+create_draft_request = {
+    'message': {
+        'raw': raw_message,
+        'threadId': thread_id  # gắn draft vào thread này
+    }
+}
+
+# Gửi yêu cầu tạo draft
+draft = service.users().drafts().create(userId='me', body=create_draft_request).execute()
+print(f"Draft ID: {draft['id']} created in thread {thread_id}")

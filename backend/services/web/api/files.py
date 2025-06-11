@@ -8,16 +8,17 @@ from pydantic import BaseModel
 import json
 import traceback
 import io
+import filetype
 from PyPDF2 import PdfReader
 
 from backend.core.config import settings
 from backend.db.metadata import get_metadata_db
 from backend.services.messaging import publish_message
 from backend.utils.s3 import upload_to_s3, upload_to_s3_public, get_signed_url
+from backend.services.web.api.auth import get_admin_user
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-# Models for request/response
 class FileUpdateRequest(BaseModel):
     description: Optional[str] = None
     status: Optional[str] = None
@@ -25,55 +26,75 @@ class FileUpdateRequest(BaseModel):
     file_created_at: Optional[str] = None
 
 class ProcessFileRequest(BaseModel):
-    page_ranges: Optional[List[str]] = None  # List of strings in format "start-end" (e.g. "1-5")
+    page_ranges: Optional[List[str]] = None 
 
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
     description: Optional[str] = Form(None),
     file_created_at: Optional[str] = Form(None),
-    keywords: Optional[str] = Form(None)
+    keywords: Optional[str] = Form(None),
+    current_user: dict = Depends(get_admin_user)
 ):
     """
     Upload a file to S3 and store metadata
     """
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    content = await file.read()
+    content_type = ""
+    detected_type = filetype.guess(content)
+    if detected_type is not None:
+        content_type = detected_type.mime
+    else:
+        print(f"Error: Could not detect file type: {file.filename}")
+
+    
+    allowed_mime_types = []
+    try:
+        mime_types_file = os.path.join(os.path.dirname(__file__), '../../../../mime_types.txt')
+        with open(mime_types_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    allowed_mime_types.append(line)
+    except Exception as e:
+        print(f"Warning: Could not load mime_types.txt: {e}")
+        allowed_mime_types = ['application/pdf', 'text/plain']
+    
+    if content_type not in allowed_mime_types:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"File type not supported. Allowed types: {', '.join(allowed_mime_types)}"
+        )
     
     try:
-        # Generate unique identifier but keep original filename
         unique_id = str(uuid.uuid4())
         safe_filename = file.filename.replace(" ", "_").lower()
         
-        # Read file content
-        content = await file.read()
         file_size = len(content)
         
-        # Count pages in PDF
-        pdf_pages = 0
-        try:
-            pdf = PdfReader(io.BytesIO(content))
-            pdf_pages = len(pdf.pages)
-        except Exception as e:
-            print(f"Warning: Could not read PDF pages: {str(e)}")
+        file_pages = 0
+        
+        if content_type == 'application/pdf':
+            try:
+                pdf = PdfReader(io.BytesIO(content))
+                file_pages = len(pdf.pages)
+            except Exception as e:
+                print(f"Warning: Could not read PDF pages: {str(e)}")
+                file_pages = 1 
+        elif content_type == 'text/plain':
+            file_pages = 1
         
         # Upload to S3 with public-read ACL
         s3_path = f"files/{unique_id}_{safe_filename}"
         
-        # Get direct public URL
         public_url = await upload_to_s3_public(content, s3_path)
         
-        # Process keywords - simply use provided string directly
         keywords_str = keywords or ""        
-        # Clean up keywords string: remove extra spaces, ensure comma separation
         if keywords_str:
             keywords_str = ",".join([k.strip() for k in keywords_str.split(',') if k.strip()])
-            print(f"Processed keywords string: '{keywords_str}'")
         
-        # Parse keywords into list for response
         keyword_list = [k.strip() for k in keywords_str.split(',') if k.strip()] if keywords_str else []
         
-        # Store in database
         db = get_metadata_db()
         
         current_time = datetime.now().isoformat()
@@ -81,13 +102,13 @@ async def upload_file(
         file_id = db.add_pdf_file(
             filename=safe_filename,
             file_size=file_size,
-            content_type=file.content_type or "application/pdf",
-            object_url=public_url,  # Use public URL here
+            content_type=content_type,  
+            object_url=public_url,  
             description=description,
             file_created_at=file_created_at,
             keywords=keywords_str,
             uuid=unique_id,
-            pages=pdf_pages
+            pages=file_pages
         )
         
         # Format response to match frontend expectations
@@ -100,12 +121,12 @@ async def upload_file(
             "fileCreatedAt": file_created_at or current_time,
             "updatedAt": current_time,
             "uuid": unique_id,
-            "object_url": public_url,  # Include public URL in response
-            "status": "pending",  # Sử dụng giá trị status đúng như trong database
+            "object_url": public_url,  
+            "status": "pending",  
             "description": description,
             "keywords": keyword_list,
-            "pages": pdf_pages,
-            "type": "pdf",
+            "pages": file_pages,
+            "type": content_type,
             "uploadedBy": "admin"
         }
     except Exception as e:
@@ -120,14 +141,11 @@ async def list_files(
     query: Optional[str] = Query(None, description="Search query for title or description"),
     sort_by: Optional[str] = Query(None, description="Field to sort by (size, uploadAt, updatedAt, fileCreatedAt)"),
     sort_order: Optional[str] = Query("desc", description="Sort order (asc, desc, newest, oldest, largest, smallest)"),
-    date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)")
+    date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
+    current_user: dict = Depends(get_admin_user)
 ):
-    """
-    Unified endpoint for listing all files with filtering, searching, and sorting
-    """
     try:
         
-        # Initialize database connection
         db = get_metadata_db()
         
         # Default files query for non-deleted files when status is not specified
@@ -362,7 +380,7 @@ async def list_files(
         )
 
 @router.get("/stats")
-async def get_file_stats():
+async def get_file_stats(current_user: dict = Depends(get_admin_user)):
     """
     Get file statistics for dashboard including storage usage
     """
@@ -411,7 +429,7 @@ async def get_file_stats():
         raise HTTPException(status_code=500, detail=f"Failed to get file statistics: {str(e)}")
 
 @router.get("/{file_id}")
-async def get_file(file_id: int):
+async def get_file(file_id: int, current_user: dict = Depends(get_admin_user)):
     """
     Get details of a specific file
     """
@@ -452,7 +470,6 @@ async def get_file(file_id: int):
             "pages_processed_range": file.get("pages_processed_range")
         }
         
-        # Không thực hiện mapping status nữa, sử dụng giá trị nguyên gốc từ database
         
         return formatted_file
     except HTTPException:
@@ -461,7 +478,7 @@ async def get_file(file_id: int):
         raise HTTPException(status_code=500, detail=f"Failed to get file: {str(e)}")
 
 @router.post("/{file_id}/process")
-async def process_file(file_id: int, process_request: Optional[ProcessFileRequest] = None):
+async def process_file(file_id: int, process_request: Optional[ProcessFileRequest] = None, current_user: dict = Depends(get_admin_user)):
     """
     Send a file for processing with optional page ranges
     """
@@ -478,10 +495,8 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         if file["status"] == "processed":
             return {"message": "File has already been processed", "status": "processed"}
         
-        # Get total pages
         total_pages = file.get("pages", 0)
         
-        # Get existing processed page ranges if any
         current_ranges = []
         if file.get("pages_processed_range"):
             try:
@@ -491,7 +506,6 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
             except:
                 current_ranges = []
         
-        # Determine page ranges to process
         page_ranges_to_process = []
         
         if process_request and process_request.page_ranges:
@@ -568,37 +582,30 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         if not page_ranges_to_process:
             return {"message": "No page ranges to process", "status": file["status"]}
         
-        # Cập nhật status thành "preparing"
         db.update_pdf_status(file_id, "preparing")
         
-        # Get keywords from the database - we need the raw string
         keywords_str = file.get("keywords", "")
                 
         file_uuid = file.get("uuid")
         file_created_at = file.get("file_created_at")
         
-        # Log để debug
         print(f"Preparing to process file {file_id} with ranges: {page_ranges_to_process}")
-        
-        # Gửi message cho tất cả các page range
-        # Mỗi range sẽ được xử lý và gọi webhook khi hoàn thành
+
         for page_range in page_ranges_to_process:
-            # Send processing request via messaging service
             message_data = {
                 "file_id": file_uuid,
                 "file_path": file["object_url"],
                 "file_created_at": file_created_at,
-                "keywords": keywords_str,  # Send the raw keywords string directly
+                "keywords": keywords_str,
+                "content_type": file.get("content_type", "application/pdf"),  
                 "action": "process",
-                "page_range": page_range,  # Already in string format "start-end"
-                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"  # URL to call when processing is complete
+                "page_range": page_range,  
+                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
             }
             
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
-        # Không cập nhật status thành "processing" - để processing_service tự cập nhật
-        # Status sẽ giữ nguyên là "preparing"
-        
+
         return {
             "message": f"File {file_id} sent for processing",
             "status": "preparing",
@@ -607,7 +614,6 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
     except HTTPException:
         raise
     except Exception as e:
-        # Revert status on error
         try:
             db = get_metadata_db()
             db.update_pdf_status(file_id, "pending")
@@ -619,7 +625,7 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 @router.delete("/{file_id}")
-async def delete_file(file_id: int):
+async def delete_file(file_id: int, current_user: dict = Depends(get_admin_user)):
     """
     Soft delete a file and its metadata
     """
@@ -663,7 +669,7 @@ async def delete_file(file_id: int):
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
 
 @router.post("/{file_id}/restore")
-async def restore_file(file_id: int):
+async def restore_file(file_id: int, current_user: dict = Depends(get_admin_user)):
     """
     Restore a previously deleted file
     """
@@ -712,7 +718,8 @@ async def restore_file(file_id: int):
 @router.put("/update/{file_id}")
 async def update_file(
     file_id: int,
-    file_update: FileUpdateRequest
+    file_update: FileUpdateRequest,
+    current_user: dict = Depends(get_admin_user)
 ):
     """
     Update file metadata

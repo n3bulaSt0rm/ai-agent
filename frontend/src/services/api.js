@@ -11,6 +11,20 @@ const apiClient = axios.create({
   }
 });
 
+// Add request interceptor to include auth token
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 // API service for Files management
 const filesApi = {
   // Get all files with pagination and optional filters
@@ -319,4 +333,179 @@ const filesApi = {
   }
 };
 
+// API service for Intelligent Search
+const searchApi = {
+  // Intelligent document search
+  intelligentSearch: async (text) => {
+    try {
+      if (!text || !text.trim()) {
+        throw new Error('Search text is required');
+      }
+      
+      console.log('Sending intelligent search request with text:', text.substring(0, 100) + '...');
+      
+      const response = await apiClient.post('/search/intelligent', {
+        text: text.trim()
+      }, {
+        timeout: 180000 // 3 minutes timeout
+      });
+      
+      console.log('Intelligent search response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Error in intelligent search:', error);
+      if (error.response) {
+        console.error('Server response:', error.response.status, error.response.data);
+      }
+      throw error;
+    }
+  },
+  
+  // Check search service health
+  getSearchHealth: async () => {
+    try {
+      const response = await apiClient.get('/search/health', { timeout: 5000 });
+      return response.data;
+    } catch (error) {
+      console.error('Error checking search health:', error);
+      return {
+        status: "unhealthy",
+        processing_service: "unavailable",
+        error: error.message
+      };
+    }
+  }
+};
+
+// API service for User Management
+const usersApi = {
+  // Get all users with pagination, search, sorting and filtering (similar to files)
+  getUsers: async (limit = 10, offset = 0, search = null, sort_by = null, sort_order = null, date = null) => {
+    try {
+      let url = `/users/?limit=${limit}&offset=${offset}`;
+      
+      // Add optional filters
+      if (search) {
+        url += `&search=${encodeURIComponent(search)}`;
+      }
+      if (sort_by) {
+        url += `&sort_by=${sort_by}`;
+      }
+      if (sort_order) {
+        url += `&sort_order=${sort_order}`;
+      }
+      if (date) {
+        url += `&date=${date}`;
+      }
+      
+      // Add cache buster
+      url += `&_t=${Date.now()}`;
+      
+      console.log('Fetching users from URL:', url);
+      const response = await apiClient.get(url);
+      console.log('Users API response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      throw error;
+    }
+  },
+
+  // Get a single user by ID
+  getUser: async (userId) => {
+    try {
+      const response = await apiClient.get(`/users/${userId}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching user ${userId}:`, error);
+      throw error;
+    }
+  },
+
+  // Update user role
+  updateUserRole: async (userId, role) => {
+    try {
+      const response = await apiClient.put(`/users/${userId}/role`, {
+        role: role
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating role for user ${userId}:`, error);
+      throw error;
+    }
+  },
+
+  // Ban user
+  banUser: async (userId) => {
+    try {
+      const response = await apiClient.post(`/users/${userId}/ban`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error banning user ${userId}:`, error);
+      throw error;
+    }
+  },
+
+  // Unban user
+  unbanUser: async (userId) => {
+    try {
+      const response = await apiClient.post(`/users/${userId}/unban`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error unbanning user ${userId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get user statistics (similar to files stats)
+  getUserStats: async () => {
+    try {
+      const timestamp = new Date().getTime();
+      const response = await apiClient.get(`/users/stats?_=${timestamp}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching user statistics:', error);
+      // Return default empty stats to prevent UI errors
+      return {
+        total: 0,
+        admin: 0,
+        user: 0,
+        recent_month: 0,
+        today_new: 0
+      };
+    }
+  },
+
+  // Search users
+  searchUsers: async (query, limit = 10, offset = 0) => {
+    try {
+      return usersApi.getUsers(limit, offset, query);
+    } catch (error) {
+      console.error('Error searching users:', error);
+      throw error;
+    }
+  },
+
+  // Filter users by date
+  filterUsersByDate: async (date, limit = 10, offset = 0) => {
+    try {
+      return usersApi.getUsers(limit, offset, null, null, null, date);
+    } catch (error) {
+      console.error(`Error filtering users by date ${date}:`, error);
+      throw error;
+    }
+  },
+
+  // Sort users
+  sortUsers: async (sortBy, sortOrder = 'desc', limit = 10, offset = 0) => {
+    try {
+      return usersApi.getUsers(limit, offset, null, sortBy, sortOrder);
+    } catch (error) {
+      console.error(`Error sorting users by ${sortBy}:`, error);
+      throw error;
+    }
+  }
+};
+
+export { searchApi, usersApi };
 export default filesApi; 

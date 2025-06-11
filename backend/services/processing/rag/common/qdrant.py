@@ -25,6 +25,7 @@ class ChunkData:
     file_id: str
     parent_chunk_id: int
     file_created_at: Optional[str] = None
+    source: Optional[str] = None
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ChunkData':
@@ -34,6 +35,7 @@ class ChunkData:
             content=data['content'],
             file_id=data['metadata']['file_id'],
             parent_chunk_id=data['metadata']['parent_chunk_id'],
+            source=data['metadata'].get('source')
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -47,6 +49,9 @@ class ChunkData:
         
         if self.file_created_at:
             result["file_created_at"] = self.file_created_at
+            
+        if self.source:
+            result["source"] = self.source
         
         return result
 
@@ -229,6 +234,10 @@ class QdrantManager:
                     "parent_chunk_id": chunk.parent_chunk_id,
                     "is_deleted": False  # Default value
                 }
+                
+                # Add source if available
+                if hasattr(chunk, 'source') and chunk.source:
+                    payload["source"] = chunk.source
                 
                 # Add any additional attributes from the chunk object
                 for attr_name in dir(chunk):

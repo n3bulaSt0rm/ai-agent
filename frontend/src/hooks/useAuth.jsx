@@ -1,11 +1,6 @@
 import { useState, useEffect, useContext, createContext } from 'react';
 
-// Hardcoded credentials 
-const ADMIN_USER = { 
-  username: 'admin', 
-  password: 'admin123',
-  role: 'admin'
-};
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 const AuthContext = createContext();
 
@@ -17,7 +12,9 @@ export const AuthProvider = ({ children }) => {
     // Check if user is logged in on initial load from local storage
     const checkLoggedIn = () => {
       const storedUser = localStorage.getItem('user');
-      if (storedUser) {
+      const storedToken = localStorage.getItem('token');
+      
+      if (storedUser && storedToken) {
         setUser(JSON.parse(storedUser));
       }
       setLoading(false);
@@ -26,27 +23,40 @@ export const AuthProvider = ({ children }) => {
     checkLoggedIn();
   }, []);
 
-  // Simple login function with hardcoded credentials
+  // Traditional username/password login
   const login = async (username, password) => {
     setLoading(true);
     
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
     try {
-      // Check against hardcoded credentials
-      if (username === ADMIN_USER.username && password === ADMIN_USER.password) {
-        const userInfo = {
-          username: ADMIN_USER.username,
-          role: ADMIN_USER.role
-        };
-        
-        // Save user to local storage
-        localStorage.setItem('user', JSON.stringify(userInfo));
-        setUser(userInfo);
-        return true;
+      // Use FormData for traditional OAuth2 password flow
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+
+      const response = await fetch(`${API_BASE_URL}/api/auth/token`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Login failed');
       }
-      return false;
+
+      const data = await response.json();
+      
+      const userInfo = {
+        username: data.user_info.username,
+        uuid: data.user_info.uuid,
+        role: data.user_info.role,
+        accessToken: data.access_token
+      };
+      
+      // Save user to local storage
+      localStorage.setItem('user', JSON.stringify(userInfo));
+      localStorage.setItem('token', data.access_token);
+      setUser(userInfo);
+      return true;
     } catch (error) {
       console.error('Login error:', error);
       return false;
@@ -55,10 +65,29 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Google login function - redirect to backend
+  const loginWithGoogle = async () => {
+    try {
+      setLoading(true);
+      // Redirect to backend Google OAuth endpoint
+      window.location.href = `${API_BASE_URL}/api/auth/google`;
+      return true;
+    } catch (error) {
+      console.error('Google login error:', error);
+      setLoading(false);
+      return false;
+    }
+  };
+
   // Logout function
-  const logout = () => {
-    localStorage.removeItem('user');
-    setUser(null);
+  const logout = async () => {
+    try {
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+      setUser(null);
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
   return (
@@ -68,7 +97,11 @@ export const AuthProvider = ({ children }) => {
         user,
         loading,
         login,
-        logout
+        loginWithGoogle,
+        logout,
+        setUser,
+        isAdmin: user?.role === 'admin',
+        userRole: user?.role || null
       }}
     >
       {children}

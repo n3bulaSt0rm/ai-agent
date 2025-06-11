@@ -27,10 +27,17 @@ from backend.db.metadata import get_metadata_db
 
 from backend.services.processing.rag.draft_monitor import EmailDraftMonitor
 
-from backend.services.processing.rag.utils import create_deepseek_client, DeepSeekAPIClient
+from backend.services.processing.rag.utils import (
+    create_deepseek_client, DeepSeekAPIClient, 
+    extract_image_attachments, extract_text_content
+)
 
-# Gemini Multimodal Processor import  
-from backend.services.processing.rag.extractors.gemini.multimodal_processor import GeminiMultimodalProcessor
+# Gemini Email Processor import  
+from backend.services.processing.rag.extractors.gemini.gemini_email_processor import GeminiEmailProcessor
+
+# Import background worker and API monitor
+from backend.services.processing.rag.gmail_api_monitor import create_gmail_api_monitor
+from backend.services.processing.rag.gmail_background_worker import GmailThreadWorker
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -42,31 +49,23 @@ class GmailHandler:
     Gmail handler that processes emails with multimodal content using Gemini
     """
     
-    def __init__(self, token_path: str = None, use_gemini: bool = True):
+    def __init__(self, token_path: str = None):
         """
-        Initialize Gmail handler.
+        Initialize Gmail handler with Gemini always enabled.
         
         Args:
             token_path: Path to the token JSON file  
-            use_gemini: Whether to use Gemini for image processing
         """
         self.token_path = token_path or settings.GMAIL_TOKEN_PATH
         self.service = None
         self.user_id = 'me'
-        self.use_gemini = use_gemini
-        self.current_message_id = None  # Track current message for attachment downloading
         
-        # Initialize Gemini processor if enabled
-        if self.use_gemini:
-            try:
-                self.gemini_processor = GeminiMultimodalProcessor()
-                logger.info("Gemini enabled for image processing")
-            except Exception as e:
-                logger.warning(f"Gemini init failed: {e}")
-                self.use_gemini = False
-                self.gemini_processor = None
-        else:
-            self.gemini_processor = None
+        try:
+            self.gemini_processor = GeminiEmailProcessor()
+            logger.info("Gemini email processor initialized for attachment processing")
+        except Exception as e:
+            logger.error(f"Gemini initialization failed: {e}")
+            raise Exception(f"Required Gemini processor failed to initialize: {e}")
         
         self.deepseek_api_key = settings.DEEPSEEK_API_KEY
         self.deepseek_api_url = settings.DEEPSEEK_API_URL
@@ -85,6 +84,8 @@ class GmailHandler:
         self.draft_monitor = None
         self.api_monitor = None
         
+        self.background_worker = None
+        
         if not self.deepseek_api_key:
             logger.warning("DEEPSEEK_API_KEY not set in settings")
     
@@ -100,15 +101,27 @@ class GmailHandler:
             user_id=self.user_id
         )
         
-        if settings.GMAIL_TOKEN_PATH:
-            from backend.services.processing.rag.gmail_api_monitor import create_gmail_api_monitor
-            # Use polling interval from settings
-            self.api_monitor = create_gmail_api_monitor(gmail_handler=self, poll_interval=settings.GMAIL_POLL_INTERVAL)
-        else:
-            logger.error("Gmail API configuration missing. Ensure GMAIL_TOKEN_PATH exists")
-            raise ValueError("Gmail API OAuth configuration required")
+        self.api_monitor = create_gmail_api_monitor(gmail_handler=self, poll_interval=settings.GMAIL_POLL_INTERVAL)
         
         logger.info("Draft monitor and Gmail API monitor initialized successfully")
+
+    def _init_background_worker(self):
+        """Initialize background worker (called separately after authentication)"""
+        if not self.service:
+            logger.error("Gmail service not authenticated, cannot initialize background worker")
+            return False
+        
+        try:
+            self.background_worker = GmailThreadWorker(
+                gmail_service=self.service,
+                user_id=self.user_id
+            )
+            self.background_worker.start()
+            logger.info("Gmail background worker initialized and started")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize background worker: {e}")
+            return False
 
     def _init_query_module(self):
         """
@@ -124,14 +137,14 @@ class GmailHandler:
             try:
                 # Import here to avoid circular imports
                 from backend.services.processing.server import modules
-                if hasattr(modules, 'cuda_memory_manager'):
+                if hasattr(modules, 'cuda_memory_manager') and modules.cuda_memory_manager:
                     memory_manager = modules.cuda_memory_manager
                     logger.info("Using shared CUDA Memory Manager from server")
                 if hasattr(modules, 'embedding_module') and modules.embedding_module:
                     embedding_module = modules.embedding_module
                     logger.info("Using shared Embedding Module from server")
-            except ImportError:
-                logger.warning("Could not import modules from server")
+            except (ImportError, AttributeError) as e:
+                logger.warning(f"Could not import modules from server: {e}")
             
             # Create embedding module only if not available from server
             if not embedding_module:
@@ -280,23 +293,21 @@ class GmailHandler:
             Processed email body content
         """
         try:
-            # Store current message ID for attachment downloading
-            self.current_message_id = message.get('id')
-            
+            message_id = message.get('id')
             payload = message.get('payload', {})
             
-            # Extract text content
-            email_text = self._extract_text_content(payload)
+            email_text = extract_text_content(payload)
             
-            # Extract image attachments 
-            image_attachments = self._extract_image_attachments(payload)
+            image_attachments = extract_image_attachments(self.service, self.user_id, payload, message_id)
             
-            # Process images with Gemini if available
-            if image_attachments and self.use_gemini and self.gemini_processor:
+            # Process attachments with Gemini if present
+            if image_attachments:
                 try:
                     logger.info(f"Processing {len(image_attachments)} images with Gemini")
-                    return self.gemini_processor.process_email_with_images(
-                        email_text, image_attachments, "comprehensive"
+                    return self.gemini_processor.process_email_with_attachments(
+                        email_text=email_text, 
+                        image_attachments=image_attachments,
+                        pdf_attachments=[]
                     )
                 except Exception as e:
                     logger.error(f"Gemini error: {e}")
@@ -314,155 +325,7 @@ class GmailHandler:
             logger.error(f"Error extracting email body: {e}")
             return "[Lỗi trích xuất nội dung email]"
     
-    def _extract_image_attachments(self, payload: Dict) -> List[Dict[str, Any]]:
-        """
-        Extract image attachments from email payload
-        
-        Args:
-            payload: Email payload from Gmail API
-            
-        Returns:
-            List of image attachment data
-        """
-        attachments = []
-        
-        def process_part(part):
-            """Recursively process email parts to find images"""
-            mime_type = part.get('mimeType', '')
-            filename = part.get('filename', '')
-            
-            logger.debug(f"Processing part: mimeType={mime_type}, filename={filename}")
-            
-            # Check if this part is an image
-            if mime_type.startswith('image/'):
-                logger.info(f"Found image part: {mime_type}, {filename}")
-                attachment_data = self._get_attachment_data(part)
-                if attachment_data:
-                    attachments.append(attachment_data)
-                    logger.info(f"Successfully extracted image: {attachment_data['filename']} ({attachment_data['size']} bytes)")
-                else:
-                    logger.warning(f"Failed to extract image data for: {filename}")
-            
-            # Process nested parts
-            if 'parts' in part:
-                for subpart in part['parts']:
-                    process_part(subpart)
-        
-        # Start processing from the main payload
-        if 'parts' in payload:
-            for part in payload['parts']:
-                process_part(part)
-        else:
-            # Single part email
-            process_part(payload)
-        
-        logger.info(f"Found {len(attachments)} image attachments")
-        return attachments
-    
-    def _get_attachment_data(self, part: Dict) -> Optional[Dict[str, Any]]:
-        """
-        Get attachment data from email part
-        
-        Args:
-            part: Email part containing attachment
-            
-        Returns:
-            Attachment data dictionary or None
-        """
-        try:
-            body = part.get('body', {})
-            attachment_id = body.get('attachmentId')
-            
-            if not attachment_id:
-                # Inline attachment
-                data = body.get('data')
-                if data:
-                    import base64
-                    image_data = base64.urlsafe_b64decode(data)
-                    
-                    filename = part.get('filename', 'inline_image')
-                    mime_type = part.get('mimeType', 'image/jpeg')
-                    
-                    return {
-                        'data': image_data,
-                        'filename': filename,
-                        'mime_type': mime_type,
-                        'size': len(image_data)
-                    }
-            else:
-                # External attachment - download it
-                try:
-                    attachment = self.service.users().messages().attachments().get(
-                        userId=self.user_id,
-                        messageId=self.current_message_id,  # Need to track current message
-                        id=attachment_id
-                    ).execute()
-                    
-                    data = attachment.get('data')
-                    if data:
-                        import base64
-                        image_data = base64.urlsafe_b64decode(data)
-                        
-                        filename = part.get('filename', 'attachment_image')
-                        mime_type = part.get('mimeType', 'image/jpeg')
-                        
-                        logger.info(f"Downloaded external attachment: {filename} ({len(image_data)} bytes)")
-                        
-                        return {
-                            'data': image_data,
-                            'filename': filename,
-                            'mime_type': mime_type,
-                            'size': len(image_data)
-                        }
-                except Exception as e:
-                    logger.error(f"Error downloading external attachment {attachment_id}: {e}")
-                    return None
-            
-        except Exception as e:
-            logger.error(f"Error getting attachment data: {e}")
-            return None
-    
-    def _extract_text_content(self, payload: Dict) -> str:
-        """Extract text content from email payload"""
-        body_text = ""
-        
-        def extract_text_from_part(part):
-            nonlocal body_text
-            mime_type = part.get('mimeType', '')
-            body = part.get('body', {})
-            
-            if mime_type == 'text/plain':
-                data = body.get('data', '')
-                if data:
-                    import base64
-                    decoded_text = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
-                    body_text += decoded_text + "\n"
-            
-            elif mime_type == 'text/html':
-                data = body.get('data', '')
-                if data:
-                    import base64
-                    html_content = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
-                    # Convert HTML to plain text (basic implementation)
-                    import re
-                    text = re.sub('<[^<]+?>', '', html_content)
-                    text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-                    body_text += text + "\n"
-            
-            # Process nested parts
-            if 'parts' in part:
-                for subpart in part['parts']:
-                    extract_text_from_part(subpart)
-        
-        # Extract text from all parts
-        if 'parts' in payload:
-            for part in payload['parts']:
-                extract_text_from_part(part)
-        else:
-            # Single part email
-            extract_text_from_part(payload)
-        
-        return body_text.strip()
+
     
     def mark_as_read(self, message_id: str) -> None:
         """
@@ -494,7 +357,7 @@ class GmailHandler:
             to: Recipient email address
             subject: Email subject
             body: Email body
-            thread_id: Thread ID for tracking
+            thread_id: Thread ID for linking draft to specific thread
             
         Returns:
             Draft ID if successful, None if failed
@@ -503,28 +366,32 @@ class GmailHandler:
             Exception: If creating draft fails
         """
         try:
-            # Create message
             message = MIMEMultipart()
             message['to'] = to
             message['subject'] = f"Re: {subject}"
             
-            # Attach text part
             msg = MIMEText(body)
             message.attach(msg)
             
-            # Encode message
             encoded_message = base64.urlsafe_b64encode(
                 message.as_bytes()).decode()
+            
+            draft_body = {'message': {'raw': encoded_message}}
+            
+            if thread_id:
+                draft_body['message']['threadId'] = thread_id
+                logger.info(f"Linking draft to thread: {thread_id}")
+            else:
+                logger.warning("No thread_id provided - draft will not be linked to any thread")
                 
-            # Create draft
             draft = self.service.users().drafts().create(
                 userId=self.user_id,
-                body={'message': {'raw': encoded_message}}
+                body=draft_body
             ).execute()
             
             draft_id = draft['id']
             
-            logger.info(f"Draft created with ID: {draft_id}")
+            logger.info(f"Draft created with ID: {draft_id} {'(linked to thread: ' + thread_id + ')' if thread_id else '(no thread link)'}")
             return draft_id
             
         except Exception as e:
@@ -573,10 +440,13 @@ class GmailHandler:
                             content = result_item.get("content", "") if isinstance(result_item, dict) else str(result_item)
                             metadata = result_item.get("metadata", {}) if isinstance(result_item, dict) else {}
                             file_created_at = metadata.get("file_created_at")
+                            source = metadata.get("source")
                             
                             group_info += f"Tài liệu {k+1}:"
                             if file_created_at:
                                 group_info += f" (Cập nhật: {file_created_at})"
+                            if source and not source.startswith("gmail_thread"):
+                                group_info += f" [Nguồn: {source}]"
                             group_info += f"\n{content}\n\n"
                     else:
                         group_info += f"Câu hỏi {j+1}: {query}\nKhông tìm thấy thông tin liên quan.\n\n"
@@ -593,6 +463,7 @@ class GmailHandler:
                 LƯU Ý QUAN TRỌNG:
                 - Nếu có nhiều tài liệu về cùng một chủ đề với các ngày cập nhật khác nhau, chỉ sử dụng thông tin từ tài liệu có ngày cập nhật mới nhất.
                 - Khi sử dụng thông tin từ tài liệu có ngày cập nhật, hãy ghi rõ ngày cập nhật đó trong tóm tắt (ví dụ: "Theo thông tin cập nhật ngày 15/03/2024, thủ tục làm bằng tốt nghiệp yêu cầu...").
+                - Khi có thông tin nguồn tài liệu, hãy ghi rõ nguồn trong tóm tắt để có thể trích dẫn sau này.
                 - Đối với thông tin chỉ có một tài liệu hoặc không có ngày cập nhật rõ ràng, không cần ghi ngày cập nhật.
                 - Đảm bảo tóm tắt bao gồm thông tin cập nhật nhất về từng vấn đề.
                 """
@@ -635,6 +506,7 @@ Dựa trên các thông tin trên, hãy soạn một email phản hồi:
 - ĐẶC BIỆT QUAN TRỌNG: Viết email dưới dạng văn bản thuần (plain text), KHÔNG sử dụng markdown format hay bất kỳ định dạng nào khác.
 - Trả lời lần lượt từng câu hỏi, dựa vào thông tin đã tóm tắt.
 - ĐẶC BIỆT QUAN TRỌNG: Nếu biết thông tin được cập nhật vào ngày nào (có ngày cập nhật cụ thể), hãy ghi rõ ngày cập nhật đó trong câu trả lời để người dùng biết đây là thông tin mới nhất. Ví dụ: "Theo thông tin cập nhật ngày 15/03/2024, quy trình đăng ký học phần đã thay đổi..."
+- ĐẶC BIỆT QUAN TRỌNG: Khi có thông tin nguồn tài liệu, hãy trích dẫn nguồn thông tin ở cuối email và cách đánh dấu footnotes ở phần thông tin.
 - Đối với các thông tin không có ngày cập nhật cụ thể, trả lời bình thường không cần ghi ngày.
 - Nếu không có đủ thông tin, hãy đề xuất người gửi liên hệ bộ phận có thẩm quyền hoặc cung cấp thêm chi tiết.
 - Đảm bảo định dạng email hành chính: lời chào, nội dung chính, lời kết, ký tên.
@@ -665,7 +537,149 @@ Viết email phản hồi ngay dưới đây (chỉ trả về nội dung email 
             logger.warning(f"Error processing email with Vietnamese Query Module: {e}")
             return "Xin lỗi, có lỗi xảy ra khi xử lý email. Vui lòng liên hệ trực tiếp để được hỗ trợ.", "Lỗi xử lý email"
     
+    def process_text_with_vietnamese_query_module(self, text_content: str) -> str:
+        """
+        Process general text content with Vietnamese Query Module and generate comprehensive response
+        
+        Args:
+            text_content: Input text content to process
+            
+        Returns:
+            str: Comprehensive response with information and sources
+        """
+        try:
+            if self.query_module is None:
+                self._init_query_module()
+            
+            logger.info("Processing text with Vietnamese Query Module")
+            results, conversation = self.query_module.process_text(text_content)
+            
+            if not results:
+                logger.warning("No results from Vietnamese Query Module for text")
+                return "Không tìm thấy thông tin liên quan đến nội dung của bạn."
+            
+            # Validate conversation context
+            if not conversation:
+                logger.error("No conversation context available from query module")
+                return "Lỗi: Không có context cuộc hội thoại để xử lý văn bản."
+            
+            logger.info(f"Successfully obtained conversation context and {len(results)} query results")
+            
+            logger.info(f"Summarizing {len(results)} results from query module")
+            summarized_results = []
+            
+            for i in range(0, len(results), 2):
+                group = results[i:i+2]  # Get group of 2 (or 1 if odd number)
+                logger.debug(f"Processing group {i//2 + 1}: {len(group)} queries")
+                
+                group_info = ""
+                group_queries = []
+                
+                for j, result in enumerate(group):
+                    query = result.original_query
+                    group_queries.append(query)
+                    
+                    # Format information for this query
+                    if result.results:
+                        group_info += f"Câu hỏi {j+1}: {query}\n"
+                        for k, result_item in enumerate(result.results):
+                            # Extract content and metadata
+                            content = result_item.get("content", "") if isinstance(result_item, dict) else str(result_item)
+                            metadata = result_item.get("metadata", {}) if isinstance(result_item, dict) else {}
+                            file_created_at = metadata.get("file_created_at")
+                            source = metadata.get("source")
+                            
+                            group_info += f"Tài liệu {k+1}:"
+                            if file_created_at:
+                                group_info += f" (Cập nhật: {file_created_at})"
+                            if source and not source.startswith("gmail_thread"):
+                                group_info += f" [Nguồn: {source}]"
+                            group_info += f"\n{content}\n\n"
+                    else:
+                        group_info += f"Câu hỏi {j+1}: {query}\nKhông tìm thấy thông tin liên quan.\n\n"
+                
+                summarization_prompt = f"""
+                Hãy tóm tắt lại các nội dung liên quan đến các câu hỏi và context sau một cách chính xác, đầy đủ thông tin, súc tích:
+                Context: {text_content}
+                
+                Các câu hỏi: {', '.join(group_queries)}
+                
+                Thông tin liên quan:
+                {group_info}
+                
+                LƯU Ý QUAN TRỌNG:
+                - Nếu có nhiều tài liệu về cùng một chủ đề với các ngày cập nhật khác nhau, chỉ sử dụng thông tin từ tài liệu có ngày cập nhật mới nhất, và ghi rõ ngày cập nhật đó trong tóm tắt (ví dụ: "Theo thông tin cập nhật ngày 15/03/2024, thủ tục làm bằng tốt nghiệp yêu cầu...").
+                - Các nội dung không trùng lặp thì không cần ghi rõ ngày cập nhật.
+                - Khi có thông tin nguồn tài liệu, giữ nguyên thông tin nguồn tài liệu để trích dẫn bằng footnotes ở cuối nội dung.
+                """
+                
+                # Use conversation memory to maintain context
+                if conversation and self.deepseek_client:
+                    try:
+                        summary_response = self.deepseek_client.send_message(
+                            conversation=conversation,
+                            message=summarization_prompt,
+                            temperature=0.3,
+                            max_tokens=8000,
+                            error_default=f"Không tìm được thông tin cho các câu hỏi: {', '.join(group_queries)}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Error in conversation-based summarization for queries {group_queries}: {e}")
+                        summary_response = f"Lỗi xử lý thông tin cho các câu hỏi: {', '.join(group_queries)}"
+                else:
+                    logger.error("No conversation context available for summarization")
+                    summary_response = f"Không có context xử lý cho các câu hỏi: {', '.join(group_queries)}"
+                
+                summarized_results.append({
+                    "queries": group_queries,
+                    "summary": summary_response
+                })
+            
+            response_prompt = f"""Bạn là một trợ lý AI hỗ trợ 
+Dưới đây là nội dung cần xử lý:
 
+{text_content}
+
+Dựa trên nội dung và thông tin tìm thấy, hãy tạo một phản hồi đầy đủ:
+"""
+            for i, summary in enumerate(summarized_results):
+                response_prompt += f"Nhóm thông tin {i+1}: {summary['summary']}\n"
+            
+            response_prompt += """
+Dựa trên các thông tin trên, hãy tạo một phản hồi đầy đủ:
+- Trình bày bằng tiếng Việt chuẩn, đúng chính tả, dễ hiểu.
+- ĐẶC BIỆT QUAN TRỌNG: Viết phản hồi dưới dạng văn bản thuần (plain text), KHÔNG sử dụng markdown format hay bất kỳ định dạng nào khác.
+- Trả lời lần lượt từng câu hỏi hoặc vấn đề được đặt ra, dựa vào thông tin đã tóm tắt.
+- ĐẶC BIỆT QUAN TRỌNG: Nếu biết thông tin được cập nhật vào ngày nào (có ngày cập nhật cụ thể), hãy ghi rõ ngày cập nhật đó trong câu trả lời để người dùng biết đây là thông tin mới nhất. Ví dụ: "Theo thông tin cập nhật ngày 15/03/2024, quy trình đăng ký học phần đã thay đổi..."
+- ĐẶC BIỆT QUAN TRỌNG: Khi có thông tin nguồn tài liệu, hãy trích dẫn nguồn thông tin ở cuối phản hồi và đánh dấu footnotes ở phần thông tin.
+- Đối với các thông tin không có ngày cập nhật cụ thể, trả lời bình thường không cần ghi ngày.
+- Đảm bảo phản hồi có cấu trúc rõ ràng: giới thiệu ngắn, nội dung chính, kết luận.
+
+Viết phản hồi ngay dưới đây (chỉ trả về nội dung thuần (plain text)):
+"""
+            
+            # Use conversation memory for final response generation
+            if conversation and self.deepseek_client:
+                try:
+                    final_response = self.deepseek_client.send_message(
+                        conversation=conversation,
+                        message=response_prompt,
+                        temperature=0.5,
+                        max_tokens=4000,
+                        error_default="Có lỗi xảy ra khi tạo phản hồi."
+                    )
+                except Exception as e:
+                    logger.error(f"Error in conversation-based response generation: {e}")
+                    final_response = "Xin lỗi, có lỗi xảy ra trong quá trình tạo phản hồi. Vui lòng thử lại sau."
+            else:
+                logger.error("No conversation context available for response generation")
+                final_response = "Không có context cuộc hội thoại để tạo phản hồi."
+            
+            return final_response
+            
+        except Exception as e:
+            logger.warning(f"Error processing text with Vietnamese Query Module: {e}")
+            return "Xin lỗi, có lỗi xảy ra khi xử lý văn bản. Vui lòng thử lại sau."
 
     async def _group_and_process_emails(self, unread_emails: List[Dict[str, Any]]) -> None:
         if not unread_emails:
@@ -830,11 +844,20 @@ Viết email phản hồi ngay dưới đây (chỉ trả về nội dung email 
         if not self.draft_monitor or not self.api_monitor:
             self._initialize_managers()
         
+        if not self.background_worker:
+            self._init_background_worker()
+        
         logger.info("Starting Gmail monitoring with API polling")
         
         await self.api_monitor.start_monitoring()
         logger.info("Gmail API polling monitoring started")
                 
-async def start_gmail_monitoring():
-    handler = GmailHandler()
+async def start_gmail_monitoring(gmail_handler=None):
+    if gmail_handler:
+        logger.info("Using injected Gmail handler for monitoring")
+        handler = gmail_handler
+    else:
+        logger.info("Creating new Gmail handler for monitoring")
+        handler = GmailHandler()
+    
     await handler.run()
