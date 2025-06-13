@@ -1,78 +1,74 @@
 """
-Gmail Background Worker using Cron Expression
+Gmail Indexing Worker using Cron Expression
 """
 
 import logging
 import time
 import uuid
-import os
-import tempfile
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 import threading
 import json
 from email.utils import parsedate_to_datetime
-
-from croniter import croniter
 
 from backend.core.config import settings
 from backend.db.metadata import get_metadata_db
 from backend.services.processing.rag.extractors.gemini.gemini_email_processor import GeminiEmailProcessor
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.services.processing.rag.common.qdrant import ChunkData
-from backend.services.processing.rag.utils import extract_text_content, extract_all_attachments
+from backend.services.processing.rag.utils import (
+    extract_text_content, extract_all_attachments, 
+    run_cron_scheduler
+)
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class GmailThreadWorker:
-    """Gmail background worker using cron expression for scheduling"""
+class GmailIndexingWorker:
+    """Gmail indexing worker using cron expression for scheduling"""
     
     def __init__(self, 
                  gmail_service,  
-                 user_id: str):  
+                 user_id: str,
+                 gemini_processor: Optional[GeminiEmailProcessor] = None,
+                 embedding_module: Optional[VietnameseEmbeddingModule] = None):  
         self.gmail_service = gmail_service
         self.user_id = user_id
         
         self.cron_expression = settings.WORKER_CRON_EXPRESSION
         self.collection_name = settings.EMAIL_QA_COLLECTION
-        self.days_lookback = settings.WORKER_DAYS_LOOKBACK
         
         self.metadata_db = get_metadata_db()
-        self.gemini_email_processor = None
-        self.embedding_module = None
+        
+        self.gemini_email_processor = gemini_processor
+        self.embedding_module = embedding_module
         
         self.is_running = False
         self.is_scheduled = False
         self.worker_thread = None
         
-        logger.info("Gmail Worker initialized - Cron: " + self.cron_expression + ", Collection: " + self.collection_name + ", Days lookback: " + str(self.days_lookback))
+        logger.info("Gmail Indexing Worker initialized - Cron: " + self.cron_expression + ", Collection: " + self.collection_name)
     
     def _initialize_components(self):
-        """Initialize Gemini and embedding components"""
         try:
-            # Initialize Gemini Email Processor
             if not self.gemini_email_processor:
                 self.gemini_email_processor = GeminiEmailProcessor()
                 logger.info("✓ Gemini Email Processor initialized")
+            else:
+                logger.info("✓ Using shared Gemini Email Processor")
             
-            # Initialize Embedding Module
             if not self.embedding_module:
-                self.embedding_module = VietnameseEmbeddingModule(
-                    qdrant_host=settings.QDRANT_HOST,
-                    qdrant_port=settings.QDRANT_PORT,
-                    collection_name=self.collection_name,
-                    dense_model_name=settings.DENSE_MODEL_NAME,
-                    sparse_model_name=settings.SPARSE_MODEL_NAME,
-                    reranker_model_name=settings.RERANKER_MODEL_NAME,
-                    vector_size=settings.VECTOR_SIZE
-                )
-                logger.info("✓ Embedding Module initialized for " + self.collection_name)
+                from backend.services.processing.rag.utils import initialize_embedding_module
+                self.embedding_module = initialize_embedding_module(self.collection_name)
+                if not self.embedding_module:
+                    return False
+                logger.info("✓ Embedding Module initialized")
+            else:
+                logger.info("✓ Using shared Embedding Module")
             
             return True
             
         except Exception as e:
-            logger.error("Error initializing components: " + str(e))
+            logger.error(f"Error initializing components: {e}")
             return False
     
     def _get_new_messages(self, thread_id: str, last_processed_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -196,17 +192,18 @@ class GmailThreadWorker:
             return False
     
     def _get_threads_to_process(self) -> List[Dict[str, Any]]:
-        """Get threads that need processing based on criteria"""
+        """Get threads that need processing - only non-outdated threads"""
         try:
-            return self.metadata_db.get_threads_to_process(days_lookback=self.days_lookback)
+            return self.metadata_db.get_threads_to_process()
         except Exception as e:
-            logger.error("Error getting threads to process: " + str(e))
+            logger.error(f"Error getting threads to process: {e}")
             return []
     
     def _process_single_thread(self, thread_record: Dict[str, Any]) -> bool:
         thread_id = thread_record['thread_id']
         existing_summary = thread_record.get('context_summary', '')
         last_processed_id = thread_record.get('last_processed_message_id')
+        old_embedding_id = thread_record.get('embedding_id')  
         
         try:
             new_messages = self._get_new_messages(thread_id, last_processed_id)
@@ -216,29 +213,67 @@ class GmailThreadWorker:
             new_summary, chunks = self._process_with_gemini(existing_summary, new_messages)
             
             new_last_processed_id = new_messages[-1]['id']
-            embedding_id = thread_id + "," + new_last_processed_id
+            new_embedding_id = thread_id + "," + new_last_processed_id
             
             try:
                 latest_email_date = new_messages[-1]['date']
                 if latest_email_date:
-                    latest_email_date = parsedate_to_datetime(latest_email_date).isoformat()
+                    try:
+                        parsed_date = parsedate_to_datetime(latest_email_date)
+                        if parsed_date:
+                            latest_email_date = parsed_date.isoformat()
+                        else:
+                            logger.warning(f"Failed to parse email date: {latest_email_date}")
+                            latest_email_date = thread_record.get('updated_at') or datetime.now().isoformat()
+                    except Exception as date_error:
+                        logger.error(f"Error parsing email date '{latest_email_date}': {date_error}")
+                        latest_email_date = thread_record.get('updated_at') or datetime.now().isoformat()
                 else:
-                    latest_email_date = thread_record.get('updated_at')
-            except Exception:
-                latest_email_date = thread_record.get('updated_at')
+                    latest_email_date = thread_record.get('updated_at') or datetime.now().isoformat()
+            except Exception as e:
+                logger.error(f"Error getting email date for thread {thread_id}: {e}")
+                latest_email_date = thread_record.get('updated_at') or datetime.now().isoformat()
             
-            if not self._embed_chunks(chunks, embedding_id, latest_email_date, thread_id):
+            # Embed new chunks first
+            if not self._embed_chunks(chunks, new_embedding_id, latest_email_date, thread_id):
+                logger.error(f"Failed to embed new chunks for thread {thread_id}")
                 return False
             
+            # Update metadata in database
             success = self.metadata_db.upsert_gmail_thread(
                 thread_id=thread_id,
                 context_summary=new_summary,
                 last_processed_message_id=new_last_processed_id,
-                embedding_id=embedding_id
+                embedding_id=new_embedding_id
             )
             
+            if not success:
+                logger.error(f"Failed to update metadata for thread {thread_id}")
+                # Rollback: delete the newly embedded chunks
+                try:
+                    qdrant_manager = self.embedding_module.qdrant_manager
+                    qdrant_manager.delete_chunks_by_file_id(new_embedding_id)
+                    logger.info(f"Rolled back newly embedded chunks for thread {thread_id}")
+                except Exception as rollback_error:
+                    logger.error(f"Failed to rollback chunks for thread {thread_id}: {rollback_error}")
+                return False
+            
+            # Only delete old chunks after successful metadata update
+            if old_embedding_id and old_embedding_id != new_embedding_id:
+                try:
+                    logger.info(f"Deleting old chunks for previous embedding_id: {old_embedding_id}")
+                    qdrant_manager = self.embedding_module.qdrant_manager
+                    delete_success = qdrant_manager.delete_chunks_by_file_id(old_embedding_id)
+                    if delete_success:
+                        logger.info(f"✓ Successfully deleted old chunks for previous embedding_id: {old_embedding_id}")
+                    else:
+                        logger.warning(f"Failed to delete old chunks for previous embedding_id: {old_embedding_id}")
+                except Exception as delete_error:
+                    logger.error(f"Error deleting old chunks for embedding_id {old_embedding_id}: {delete_error}")
+                    # Don't return False here as the main operation succeeded
+            
             if success:
-                logger.info("✓ Processed thread " + thread_id + ", embedded " + str(len(chunks)) + " chunks with embedding_id: " + embedding_id)
+                logger.info("✓ Processed thread " + thread_id + ", embedded " + str(len(chunks)) + " chunks with embedding_id: " + new_embedding_id)
             return success
             
         except Exception as e:
@@ -252,7 +287,7 @@ class GmailThreadWorker:
             return
         
         self.is_running = True
-        logger.info("=== Starting Gmail Thread Processing ===")
+        logger.info("Starting Gmail Thread Processing")
         
         try:
             if not self._initialize_components():
@@ -280,9 +315,9 @@ class GmailThreadWorker:
                 else:
                     logger.error(f" Failed to process thread {thread_id}")
                 
-                time.sleep(5)  # Reduce sleep time for testing 
+                time.sleep(5) 
             
-            logger.info("=== Processing Complete: " + str(processed) + "/" + str(len(threads)) + " ===")
+            logger.info("Processing Complete: " + str(processed) + "/" + str(len(threads)))
             
         except Exception as e:
             logger.error("Error in processing: " + str(e))
@@ -291,23 +326,15 @@ class GmailThreadWorker:
     
     def _scheduler_loop(self):
         """Run the cron scheduler loop"""
-        cron = croniter(self.cron_expression, datetime.now())
-        logger.info("Worker scheduled with cron: " + self.cron_expression)
-        logger.info("Next run: " + str(cron.get_next(datetime)))
-        
-        while self.is_scheduled:
-            next_run = cron.get_next(datetime)
-            now = datetime.now()
-            
-            if now >= next_run:
-                logger.info("Cron job triggered at " + str(now))
-                self._run_processing()
-                cron = croniter(self.cron_expression, datetime.now())  # Reset for next cycle
-            
-            time.sleep(60)  # Check every minute
+        run_cron_scheduler(
+            self.cron_expression,
+            self._run_processing,
+            "Gmail Indexing Worker",
+            None
+        )
     
     def start(self):
-        """Start the background worker"""
+        """Start the indexing worker"""
         if self.worker_thread and self.worker_thread.is_alive():
             logger.warning("Worker already running")
             return
@@ -315,17 +342,17 @@ class GmailThreadWorker:
         self.is_scheduled = True
         self.worker_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
         self.worker_thread.start()
-        logger.info("Gmail background worker started")
+        logger.info("Gmail indexing worker started")
     
     def stop(self):
         """Stop the worker"""
         self.is_running = False
         self.is_scheduled = False
-        logger.info("Gmail worker stopped")
+        logger.info("Gmail indexing worker stopped")
     
     def run_once(self):
-        """Run processing once for testing"""
-        logger.info("Running Gmail processing once...")
+        """Run processing once"""
+        logger.info("Running Gmail indexing once...")
         self._run_processing()
 
-# Removed global worker instance and functions - worker is now integrated into GmailHandler 
+ 

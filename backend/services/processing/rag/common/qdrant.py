@@ -548,3 +548,239 @@ class QdrantManager:
         except Exception as e:
             logger.error(f"Error updating file_created_at: {e}")
             return False
+
+    def delete_chunks_by_file_id(self, file_id: str) -> bool:
+        """
+        Delete all chunks associated with a specific file_id
+        
+        Args:
+            file_id: The file ID whose chunks should be deleted
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Deleting all chunks for file_id={file_id}")
+            
+            # Implement pagination to process all points
+            next_page_offset = None
+            total_deleted = 0
+            batch_size = 100  # Process in smaller batches for efficiency
+            
+            while True:
+                # Get points with this file_id, using pagination
+                search_results = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(key="file_id", match=MatchValue(value=file_id))
+                        ]
+                    ),
+                    limit=300,
+                    with_payload=True,
+                    offset=next_page_offset
+                )
+                
+                points = search_results[0]
+                next_page_offset = search_results[1]
+                
+                if not points:
+                    if total_deleted == 0:
+                        logger.info(f"No chunks found for file_id={file_id}")
+                    break  # No more points to process
+                
+                # Process points in batches to avoid overwhelming Qdrant
+                point_batches = [points[i:i + batch_size] for i in range(0, len(points), batch_size)]
+                
+                for batch in point_batches:
+                    point_ids = [point.id for point in batch]
+                    
+                    # Delete points in this batch
+                    try:
+                        self.client.delete(
+                            collection_name=self.collection_name,
+                            points_selector=point_ids
+                        )
+                        
+                        total_deleted += len(batch)
+                        logger.debug(f"Deleted batch of {len(batch)} chunks for file_id={file_id}")
+                        
+                    except Exception as batch_error:
+                        logger.error(f"Error deleting batch for file_id={file_id}: {batch_error}")
+                        # Continue with next batch instead of failing completely
+                        continue
+                
+                logger.info(f"Deleted {len(points)} chunks in current page for file_id={file_id}")
+                
+                # If no next page offset is returned, we've processed all points
+                if not next_page_offset:
+                    break
+            
+            logger.info(f"✓ Successfully deleted {total_deleted} chunks for file_id={file_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting chunks by file_id: {e}")
+            return False
+
+    def cleanup_old_email_chunks(self, cutoff_date: str) -> bool:
+        """
+        Delete email chunks older than cutoff date based on file_created_at
+        
+        Args:
+            cutoff_date: ISO format cutoff date string
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Cleaning up email chunks older than {cutoff_date}")
+            
+            # Implement pagination to process all points
+            next_page_offset = None
+            total_deleted = 0
+            batch_size = 100  # Process in smaller batches for efficiency
+            
+            while True:
+                # Get all email chunks (source = "gmail_thread")
+                search_results = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(key="source", match=MatchValue(value="gmail_thread"))
+                        ]
+                    ),
+                    limit=300,
+                    with_payload=True,
+                    offset=next_page_offset
+                )
+                
+                points = search_results[0]
+                next_page_offset = search_results[1]
+                
+                if not points:
+                    if total_deleted == 0:
+                        logger.info("No email chunks found for cleanup")
+                    break  # No more points to process
+                
+                # Filter points that are older than cutoff_date
+                old_points = []
+                for point in points:
+                    file_created_at = point.payload.get("file_created_at")
+                    if file_created_at and file_created_at < cutoff_date:
+                        old_points.append(point)
+                
+                if not old_points:
+                    logger.debug(f"No old chunks found in current page (checked {len(points)} chunks)")
+                    # If no next page offset is returned, we've processed all points
+                    if not next_page_offset:
+                        break
+                    continue
+                
+                # Process old points in batches
+                point_batches = [old_points[i:i + batch_size] for i in range(0, len(old_points), batch_size)]
+                
+                for batch in point_batches:
+                    point_ids = [point.id for point in batch]
+                    
+                    # Delete points in this batch
+                    try:
+                        self.client.delete(
+                            collection_name=self.collection_name,
+                            points_selector=point_ids
+                        )
+                        
+                        total_deleted += len(batch)
+                        logger.debug(f"Deleted batch of {len(batch)} old email chunks")
+                        
+                    except Exception as batch_error:
+                        logger.error(f"Error deleting old email chunks batch: {batch_error}")
+                        # Continue with next batch instead of failing completely
+                        continue
+                
+                logger.info(f"Processed {len(points)} chunks, deleted {len(old_points)} old chunks in current page")
+                
+                # If no next page offset is returned, we've processed all points
+                if not next_page_offset:
+                    break
+            
+            logger.info(f"✓ Successfully cleaned up {total_deleted} old email chunks (older than {cutoff_date})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up old email chunks: {e}")
+            return False
+
+    def delete_chunks_by_embedding_id(self, embedding_id: str) -> bool:
+        """
+        Delete all chunks associated with a specific embedding_id
+        
+        Args:
+            embedding_id: The embedding ID whose chunks should be deleted
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Deleting all chunks for embedding_id={embedding_id}")
+            
+            # Implement pagination to process all points
+            next_page_offset = None
+            total_deleted = 0
+            batch_size = 100  # Process in smaller batches for efficiency
+            
+            while True:
+                # Get points with this embedding_id (stored as file_id in chunks)
+                search_results = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(key="file_id", match=MatchValue(value=embedding_id))
+                        ]
+                    ),
+                    limit=300,
+                    with_payload=True,
+                    offset=next_page_offset
+                )
+                
+                points = search_results[0]
+                next_page_offset = search_results[1]
+                
+                if not points:
+                    if total_deleted == 0:
+                        logger.info(f"No chunks found for embedding_id={embedding_id}")
+                    break  # No more points to process
+                
+                # Process points in batches to avoid overwhelming Qdrant
+                point_batches = [points[i:i + batch_size] for i in range(0, len(points), batch_size)]
+                
+                for batch in point_batches:
+                    point_ids = [point.id for point in batch]
+                    
+                    # Delete points in this batch
+                    try:
+                        self.client.delete(
+                            collection_name=self.collection_name,
+                            points_selector=point_ids
+                        )
+                        
+                        total_deleted += len(batch)
+                        logger.debug(f"Deleted batch of {len(batch)} chunks for embedding_id={embedding_id}")
+                        
+                    except Exception as batch_error:
+                        logger.error(f"Error deleting batch for embedding_id={embedding_id}: {batch_error}")
+                        # Continue with next batch instead of failing completely
+                        continue
+                
+                logger.info(f"Deleted {len(points)} chunks in current page for embedding_id={embedding_id}")
+                
+                # If no next page offset is returned, we've processed all points
+                if not next_page_offset:
+                    break
+            
+            logger.info(f"✓ Successfully deleted {total_deleted} chunks for embedding_id={embedding_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting chunks by embedding_id: {e}")
+            return False

@@ -99,9 +99,10 @@ class Settings(BaseSettings):
     MONITORING_SLEEP_INTERVAL: int = Field(default=60, description="Monitoring loop sleep interval in seconds (1 minute)")
     
     # Background Worker settings for Gmail Thread Processing
-    WORKER_CRON_EXPRESSION: str = Field(default="0 1 */14 * *", description="Cron expression for worker schedule (default: 1 AM every 14 days)")
+    WORKER_CRON_EXPRESSION: str = Field(default="0 4 * * *", description="Cron expression for worker schedule (default: 4 AM every day)")
     EMAIL_QA_COLLECTION: str = Field(default="email_qa", description="Qdrant collection name for email embeddings")
-    WORKER_DAYS_LOOKBACK: int = Field(default=30, description="Number of days to look back for gmail threads to process")
+    CLEANUP_CRON_EXPRESSION: str = Field(default="0 2 1 * *", description="Cron expression for cleanup schedule (default: 2 AM on 1st day of every month)")
+    OUTDATED_CLEANUP_CRON_EXPRESSION: str = Field(default="0 1 1 */3 *", description="Cron expression for outdated threads cleanup (default: 1 AM on 1st day every 3 months)")
     
     # Logging settings
     LOG_LEVEL: str = Field(default="INFO")

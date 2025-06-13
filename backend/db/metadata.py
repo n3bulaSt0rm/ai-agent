@@ -78,9 +78,17 @@ class MetadataDB:
                 last_processed_message_id TEXT,
                 embedding_id TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                is_outdated INTEGER DEFAULT 0
             )
             ''')
+            
+            # Check if is_outdated column exists, add it if not
+            cursor = self.conn.execute("PRAGMA table_info(gmail_threads)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'is_outdated' not in columns:
+                self.conn.execute('ALTER TABLE gmail_threads ADD COLUMN is_outdated INTEGER DEFAULT 0')
             
             # Create default admin user if not exists
             result = self.conn.execute("SELECT * FROM users WHERE username = ?", (settings.ADMIN_USERNAME,))
@@ -938,27 +946,55 @@ class MetadataDB:
             print(f"Error getting thread by draft ID: {e}")
             return None
 
-    def get_threads_to_process(self, days_lookback: int = 7) -> List[Dict[str, Any]]:
+    def get_threads_to_process(self, cutoff_date: str = None) -> List[Dict[str, Any]]:
         """
-        Get threads that need processing based on criteria.
+        Get threads that need processing - only non-outdated threads.
         
         Args:
-            days_lookback: Number of days to look back for threads
+            cutoff_date: ISO format cutoff date string (optional, for backward compatibility)
             
         Returns:
             List of thread records that need processing
         """
         try:
-            cutoff_date = (datetime.now() - timedelta(days=days_lookback)).isoformat()
-            
             result = self.conn.execute('''
                 SELECT * FROM gmail_threads 
-                WHERE updated_at >= ?
+                WHERE (is_outdated IS NULL OR is_outdated != 1)
                 AND (
                     embedding_id IS NULL 
                     OR embedding_id != (thread_id || ',' || COALESCE(last_processed_message_id, ''))
                 )
                 ORDER BY updated_at DESC
+            ''')
+            
+            threads = []
+            for row in result:
+                thread_data = dict(row)
+                threads.append(thread_data)
+            
+            print(f"Found {len(threads)} non-outdated threads to process")
+            return threads
+            
+        except Exception as e:
+            print(f"Error getting threads to process: {e}")
+            return []
+    
+    def get_threads_for_cleanup(self, cutoff_date: str) -> List[Dict[str, Any]]:
+        """
+        Get threads that should be cleaned up based on cutoff date.
+        
+        Args:
+            cutoff_date: ISO format cutoff date string
+            
+        Returns:
+            List of thread records that should be cleaned up
+        """
+        try:
+            result = self.conn.execute('''
+                SELECT * FROM gmail_threads 
+                WHERE updated_at < ?
+                AND embedding_id IS NOT NULL
+                ORDER BY updated_at ASC
             ''', (cutoff_date,))
             
             threads = []
@@ -966,11 +1002,96 @@ class MetadataDB:
                 thread_data = dict(row)
                 threads.append(thread_data)
             
-            print(f"Found {len(threads)} threads to process (since {cutoff_date})")
+            print(f"Found {len(threads)} threads for cleanup (older than {cutoff_date})")
             return threads
             
         except Exception as e:
-            print(f"Error getting threads to process: {e}")
+            print(f"Error getting threads for cleanup: {e}")
+            return []
+
+    def get_threads_for_outdated_marking(self, cutoff_date: str) -> List[Dict[str, Any]]:
+        """
+        Get threads that should be marked as outdated based on cutoff date.
+        
+        Args:
+            cutoff_date: ISO format cutoff date string
+            
+        Returns:
+            List of thread records that should be marked as outdated
+        """
+        try:
+            result = self.conn.execute('''
+                SELECT * FROM gmail_threads 
+                WHERE updated_at < ?
+                AND (is_outdated IS NULL OR is_outdated != 1)
+                AND embedding_id IS NOT NULL
+                ORDER BY updated_at ASC
+            ''', (cutoff_date,))
+            
+            threads = []
+            for row in result:
+                thread_data = dict(row)
+                threads.append(thread_data)
+            
+            print(f"Found {len(threads)} threads to mark as outdated (older than {cutoff_date})")
+            return threads
+            
+        except Exception as e:
+            print(f"Error getting threads for outdated marking: {e}")
+            return []
+
+    def mark_thread_as_outdated(self, thread_id: str) -> bool:
+        """
+        Mark a thread as outdated.
+        
+        Args:
+            thread_id: Gmail thread ID to mark as outdated
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            now = datetime.now().isoformat()
+            
+            with self.conn:
+                self.conn.execute('''
+                    UPDATE gmail_threads 
+                    SET is_outdated = 1, updated_at = ?
+                    WHERE thread_id = ?
+                ''', (now, thread_id))
+            
+            print(f"Marked thread {thread_id} as outdated")
+            return True
+            
+        except Exception as e:
+            print(f"Error marking thread as outdated: {e}")
+            return False
+
+    def get_outdated_threads_with_embeddings(self) -> List[Dict[str, Any]]:
+        """
+        Get threads that are marked as outdated and have embedding_id.
+        
+        Returns:
+            List of outdated thread records with embedding_id
+        """
+        try:
+            result = self.conn.execute('''
+                SELECT * FROM gmail_threads 
+                WHERE is_outdated = 1
+                AND embedding_id IS NOT NULL
+                ORDER BY updated_at ASC
+            ''')
+            
+            threads = []
+            for row in result:
+                thread_data = dict(row)
+                threads.append(thread_data)
+            
+            print(f"Found {len(threads)} outdated threads with embeddings")
+            return threads
+            
+        except Exception as e:
+            print(f"Error getting outdated threads: {e}")
             return []
 
     def get_all_users_advanced(self, limit: int = 100, offset: int = 0, search_query: str = None, 

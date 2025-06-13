@@ -164,7 +164,7 @@ const FileDetail = () => {
   // Add function to update file created date
   const handleSaveCreatedDate = async () => {
     try {
-      setLoadingAction({ isLoading: true, message: 'Updating file date...' });
+      setLoadingAction({ isLoading: true, message: 'Updating document creation date...' });
       
       await filesApi.updateFileCreatedAt(document.id, createdDateInput);
       
@@ -175,7 +175,7 @@ const FileDetail = () => {
       });
       
       setIsEditingCreatedDate(false);
-      toast.success('File creation date updated successfully');
+      toast.success('Document creation date updated successfully');
       
     } catch (error) {
       console.error('Error updating file creation date:', error);
@@ -575,13 +575,13 @@ const FileDetail = () => {
                 </div>
                 
                 <div className="detail-row">
-                  <div className="detail-label">Created date</div>
+                  <div className="detail-label">Document Creation Date</div>
                   <div className="detail-value-group">
                     <div className="detail-value">{formatDate(document.fileCreatedAt)}</div>
                     <button
                       className="btn-icon"
                       onClick={() => setIsEditingCreatedDate(true)}
-                      title="Edit creation date"
+                      title="Edit document creation date"
                     >
                       <PencilIcon className="w-4 h-4" />
                     </button>
@@ -612,7 +612,7 @@ const FileDetail = () => {
                           onClick={handleSaveCreatedDate}
                         >
                           <CalendarIcon className="w-4 h-4 mr-1" />
-                          Update Date
+                          Update Current Date
                         </button>
                       </div>
                     </div>

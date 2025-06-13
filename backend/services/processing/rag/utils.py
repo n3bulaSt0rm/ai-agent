@@ -3,7 +3,6 @@ Shared utilities for RAG processing services.
 """
 
 import logging
-import requests
 import time
 import base64
 from typing import Dict, Any, List, Optional
@@ -13,7 +12,6 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.exceptions import LangChainException
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DeepSeekAPIClient:
@@ -406,4 +404,86 @@ def save_attachment_to_temp_file(attachment_data: Dict[str, Any]) -> str:
         
     except Exception as e:
         logger.error(f"Error saving attachment to temp file: {e}")
+        raise
+
+
+def initialize_embedding_module(collection_name: str):
+    """Initialize embedding module for Gmail workers"""
+    from backend.core.config import settings
+    from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
+    
+    try:
+        return VietnameseEmbeddingModule(
+            qdrant_host=settings.QDRANT_HOST,
+            qdrant_port=settings.QDRANT_PORT,
+            collection_name=collection_name,
+            dense_model_name=settings.DENSE_MODEL_NAME,
+            sparse_model_name=settings.SPARSE_MODEL_NAME,
+            reranker_model_name=settings.RERANKER_MODEL_NAME,
+            vector_size=settings.VECTOR_SIZE
+        )
+    except Exception as e:
+        logger.error(f"Error initializing embedding module: {e}")
+        return None
+
+
+def calculate_cutoff_date_from_cron(cron_expression: str) -> str:
+    """Calculate cutoff date from cron expression"""
+    from datetime import datetime, timedelta
+    from croniter import croniter
+    
+    try:
+        now = datetime.now()
+        cron = croniter(cron_expression, now)
+        cutoff_date = cron.get_prev(datetime).isoformat()
+        logger.debug(f"Calculated cutoff date: {cutoff_date}")
+        return cutoff_date
+    except Exception as e:
+        logger.error(f"Error calculating cutoff date: {e}")
+        fallback_date = (datetime.now() - timedelta(days=30)).isoformat()
+        logger.warning(f"Using fallback cutoff: {fallback_date}")
+        return fallback_date
+
+
+def run_cron_scheduler(cron_expression: str, worker_func, worker_name: str, is_scheduled_attr=None):
+    """Generic cron scheduler for workers"""
+    from datetime import datetime
+    from croniter import croniter
+    import time
+    
+    try:
+        cron = croniter(cron_expression, datetime.now())
+        logger.info(f"{worker_name} scheduled with cron: {cron_expression}")
+        
+        # Access the actual worker object and its is_scheduled attribute
+        worker_obj = worker_func.__self__
+        
+        while getattr(worker_obj, 'is_scheduled', False):
+            try:
+                next_run = cron.get_next(datetime)
+                now = datetime.now()
+                
+                if now >= next_run:
+                    logger.info(f"Running {worker_name} at {now}")
+                    try:
+                        worker_func()
+                    except Exception as e:
+                        logger.error(f"Error in {worker_name} execution: {e}")
+                    
+                    # Reset cron iterator to get next scheduled time
+                    cron = croniter(cron_expression, datetime.now())
+                    next_run = cron.get_next(datetime)
+                
+                # Calculate sleep time until next run (max 60 seconds)
+                sleep_time = min(60, max(1, (next_run - datetime.now()).total_seconds()))
+                time.sleep(sleep_time)
+                
+            except Exception as e:
+                logger.error(f"Error in {worker_name} scheduler loop: {e}")
+                time.sleep(60)  # Fallback sleep on error
+        
+        logger.info(f"{worker_name} scheduler stopped")
+        
+    except Exception as e:
+        logger.error(f"Fatal error in {worker_name} scheduler: {e}")
         raise 

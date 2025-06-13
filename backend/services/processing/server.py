@@ -692,19 +692,19 @@ def initialize_modules():
         )
         logger.info("Vietnamese Embedding Module initialized successfully")
         
+        # Initialize Gmail Handler with query module for text processing
+        logger.info("Initializing Gmail Handler for text processing...")
         modules.gmail_handler = GmailHandler()
         
         # Only initialize the query module, don't authenticate Gmail
         try:
             modules.gmail_handler._init_query_module()
-            logger.info("Gmail Handler query module initialized successfully for text processing")
+            logger.info("Gmail Handler initialized successfully for text processing")
         except Exception as e:
-            logger.error(f"Failed to initialize query module: {e}")
+            logger.error(f"Failed to initialize Gmail Handler query module: {e}")
             # Don't fail startup completely, but log the error
             modules.gmail_handler = None
             raise Exception(f"Critical: Query module initialization failed: {e}")
-        
-        logger.info("Gmail Handler initialized successfully for text processing")
         
         return True
     except Exception as e:

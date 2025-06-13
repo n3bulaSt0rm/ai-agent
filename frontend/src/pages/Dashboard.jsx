@@ -130,6 +130,12 @@ const Dashboard = () => {
       return;
     }
     
+    if (!selectedFile.fileCreatedAt) {
+      console.error('Document Creation Date not set');
+      toast.error('Please set the Document Creation Date before uploading');
+      return;
+    }
+    
     try {
       console.log('Dashboard - Uploading file:', selectedFile.name);
       console.log('Dashboard - File object type:', selectedFile instanceof File ? 'File object' : typeof selectedFile);
@@ -386,10 +392,9 @@ const Dashboard = () => {
               />
             </div>
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
               <button 
                 className="btn-primary" 
-                disabled={!selectedFile}
+                disabled={!selectedFile || !selectedFile.fileCreatedAt}
                 onClick={handleUpload}
               >
                 Upload

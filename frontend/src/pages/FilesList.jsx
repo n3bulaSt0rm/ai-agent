@@ -505,6 +505,11 @@ const FilesList = () => {
       return;
     }
     
+    if (!selectedFile.fileCreatedAt) {
+      toast.error('Please set the Document Creation Date before uploading');
+      return;
+    }
+    
     setLoadingAction({ isLoading: true, message: 'Uploading file, please wait...' });
     
     try {
@@ -960,8 +965,8 @@ const FilesList = () => {
               <option value="uploadAt_oldest">Upload At (oldest)</option>
               <option value="updatedAt_newest">Updated At (newest)</option>
               <option value="updatedAt_oldest">Updated At (oldest)</option>
-              <option value="fileCreatedAt_newest">File Created (newest)</option>
-              <option value="fileCreatedAt_oldest">File Created (oldest)</option>
+              <option value="fileCreatedAt_newest">Document Creation Date (newest)</option>
+              <option value="fileCreatedAt_oldest">Document Creation Date (oldest)</option>
             </select>
             <div className="date-field">
               <input 
@@ -1269,7 +1274,7 @@ const FilesList = () => {
               <button className="btn-secondary" onClick={() => setShowUploadModal(false)}>Cancel</button>
               <button 
                 className="btn-primary" 
-                disabled={!selectedFile}
+                disabled={!selectedFile || !selectedFile.fileCreatedAt}
                 onClick={handleUpload}
               >
                 Upload
@@ -1336,7 +1341,7 @@ const FilesList = () => {
                     <span className="detail-value">{formatDate(fileToView.uploadAt)}</span>
                   </div>
                   <div className="detail-row">
-                    <span className="detail-label">Created Date:</span>
+                    <span className="detail-label">Document Creation Date:</span>
                     <span className="detail-value">{formatDate(fileToView.fileCreatedAt)}</span>
                   </div>
                 </div>
@@ -1383,25 +1388,20 @@ const FilesList = () => {
                 </div>
                 
                 <div className="detail-section file-date-section">
-                  <h4 className="detail-section-title">Edit Created Date</h4>
-                  <div className="date-edit-section">
-                    <label htmlFor="fileCreatedAt">Update File Creation Date:</label>
-                    <div className="date-input-group">
-                      <input 
-                        type="date" 
-                        id="fileCreatedAt" 
-                        value={toInputDateFormat(fileCreatedAtInput)}
-                        onChange={(e) => setFileCreatedAtInput(e.target.value)}
-                        className="form-control"
-                      />
-                      <button 
-                        className="btn-primary save-date"
-                        onClick={handleFileCreatedAtUpdate}
-                      >
-                        Update Date
-                      </button>
-                    </div>
+                  <h4 className="detail-section-title">Edit Document Creation Date</h4>
+                  <div className="input-group">
+                    <label htmlFor="fileCreatedAt">Update Document Creation Date:</label>
+                    <input
+                      type="date"
+                      id="fileCreatedAt"
+                      value={toInputDateFormat(fileCreatedAtInput)}
+                      onChange={(e) => setFileCreatedAtInput(e.target.value)}
+                    />
                   </div>
+                  <button className="btn-primary" 
+                    onClick={handleFileCreatedAtUpdate}>
+                    Update Creation Date
+                  </button>
                 </div>
               </div>
               

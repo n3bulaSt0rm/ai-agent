@@ -28,7 +28,7 @@ class GmailAPIMonitor:
                     
                     if unread_count > 0:
                         logger.info(f"Found {unread_count} unread emails")
-                        await self.gmail_handler.fetch_unread_emails()
+                        await self.gmail_handler.process_unread_email()
                 
                 await asyncio.sleep(self.poll_interval)
                     

@@ -3,6 +3,34 @@ import { ArrowUpTrayIcon } from '@heroicons/react/24/outline';
 import '../styles/FileUploader.css';
 import '../styles/LoadingOverlay.css';
 
+// CSS for required field indicators and error messages
+const requiredFieldStyles = `
+  .required-field {
+    color: red;
+    margin-left: 4px;
+  }
+  
+  .field-error {
+    color: red;
+    font-size: 12px;
+    margin-top: 4px;
+    margin-bottom: 0;
+  }
+
+  .field-error-highlight {
+    border: 2px solid red !important;
+    animation: shake 0.5s linear;
+  }
+
+  @keyframes shake {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    50% { transform: translateX(5px); }
+    75% { transform: translateX(-5px); }
+    100% { transform: translateX(0); }
+  }
+`;
+
 /**
  * Reusable file upload component with custom styling
  * @param {Function} onFileSelected - Callback when file is selected
@@ -30,9 +58,31 @@ const FileUploader = ({
     }
   }, [keywords, fileCreatedAt]);
 
+  // Add a function to highlight the date field with an error
+  const highlightDateField = () => {
+    const dateField = document.getElementById('fileCreatedAt');
+    if (dateField) {
+      dateField.classList.add('field-error-highlight');
+      // Remove the highlight after 2 seconds
+      setTimeout(() => {
+        dateField.classList.remove('field-error-highlight');
+      }, 2000);
+    }
+  };
+
   // Update metadata and notify parent
   const updateFileMetadata = (showProcessing = true) => {
-    if (!selectedFile) return;
+    if (!selectedFile) return false;
+    
+    // Validate that document current date is filled
+    if (!fileCreatedAt) {
+      setErrorMessage(`Document Creation Date is required`);
+      highlightDateField();
+      return false;
+    }
+    
+    // Clear any previous errors
+    setErrorMessage('');
     
     // Show processing indicator only if explicitly requested
     if (showProcessing) {
@@ -46,10 +96,11 @@ const FileUploader = ({
     });
     
     // Add metadata
-    fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
+    fileWithMetadata.fileCreatedAt = fileCreatedAt;
     fileWithMetadata.keywords = keywords || '';
     
     console.log('Updating file with keywords:', keywords);
+    console.log('Updating file with date:', fileCreatedAt);
         
     // Update the selected file
     setSelectedFile(fileWithMetadata);
@@ -61,10 +112,17 @@ const FileUploader = ({
     if (showProcessing) {
       setTimeout(() => setIsProcessing(false), 500);
     }
+    
+    return true;
   };
 
   // Handle click on the custom button
   const handleButtonClick = () => {
+    if (selectedFile && !fileCreatedAt) {
+      setErrorMessage('Document Creation Date is required');
+      highlightDateField();
+      return;
+    }
     fileInputRef.current.click();
   };
 
@@ -138,11 +196,12 @@ const FileUploader = ({
       lastModified: file.lastModified
     });
     
-    // Add metadata
+    // Add metadata - make sure fileCreatedAt exists, even if empty
     fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
     fileWithMetadata.keywords = keywords || '';
     
     console.log('Setting file with keywords:', keywords);
+    console.log('Setting file with date:', fileCreatedAt);
     console.log('File size is automatically set:', fileWithMetadata.size);
     
     // Update state
@@ -159,6 +218,9 @@ const FileUploader = ({
 
   return (
     <div className="file-uploader-container">
+      {/* Inject required field styles */}
+      <style>{requiredFieldStyles}</style>
+      
       <div 
         className={`file-drop-area ${dragActive ? 'drag-active' : ''} ${isProcessing ? 'processing' : ''}`}
         onDragEnter={handleDrag}
@@ -203,7 +265,7 @@ const FileUploader = ({
             
             <div className="file-metadata">
               <div className="form-group">
-                <label htmlFor="fileCreatedAt">File Created Date:</label>
+                <label htmlFor="fileCreatedAt">Document Creation Date: <span className="required-field">*</span></label>
                 <input 
                   type="date" 
                   id="fileCreatedAt" 
@@ -211,6 +273,7 @@ const FileUploader = ({
                   onChange={handleDateChange}
                   className="form-control"
                   style={{ color: "#000000" }}
+                  required
                 />
               </div>
               

@@ -26,7 +26,7 @@ class GeminiEmailProcessor:
         
         # Configure genai with API key
         genai.configure(api_key=self.api_key)
-        logger.info("Gemini Email Processor initialized with google.generativeai SDK")
+        logger.debug("Gemini Email Processor initialized with google.generativeai SDK")
 
     def process_email_with_attachments(
         self, 
