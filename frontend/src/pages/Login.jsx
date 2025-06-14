@@ -12,11 +12,21 @@ const Login = () => {
   const [fadeIn, setFadeIn] = useState(false);
   const [showBannedModal, setShowBannedModal] = useState(false);
   const [bannedEmail, setBannedEmail] = useState('');
-  const { login, loginWithGoogle } = useAuth();
+  const { login, loginWithGoogle, isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const loginPageRef = useRef(null);
 
   useEffect(() => {
+    // Check if user is already authenticated and redirect accordingly
+    if (isAuthenticated && user) {
+      if (user.role === 'admin') {
+        navigate('/dashboard');
+      } else {
+        navigate('/search');
+      }
+      return;
+    }
+    
     // Trigger fade-in animation after component mounts
     setTimeout(() => setFadeIn(true), 100);
     
@@ -56,7 +66,7 @@ const Login = () => {
     if (loginPageRef.current) {
       createParticles();
     }
-  }, []);
+  }, [isAuthenticated, user, navigate]);
   
   const createParticles = () => {
     const container = document.createElement('div');

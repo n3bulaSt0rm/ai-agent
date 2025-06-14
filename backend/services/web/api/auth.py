@@ -65,14 +65,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             
         # Get additional user info from database to ensure we have the latest data
         db = get_metadata_db()
-        result = db.conn.execute("SELECT id, uuid, username, role FROM users WHERE username = ?", (username,))
+        result = db.conn.execute("SELECT uuid, username, role FROM users WHERE username = ?", (username,))
         user = result.fetchone()
         
         if not user:
             raise credentials_exception
             
         return {
-            "id": user["id"],
             "username": user["username"], 
             "role": user["role"], 
             "uuid": user["uuid"]
@@ -129,8 +128,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     token_data = {
         "sub": user_data["username"],
         "role": user_data["role"],
-        "uuid": user_data["uuid"],
-        "id": user_data["id"]
+        "uuid": user_data["uuid"]
     }
     
     # Create access token
@@ -249,8 +247,7 @@ async def google_callback(code: str, state: str, error: Optional[str] = None):
         token_data = {
             "sub": user_data["username"],
             "role": user_data["role"],
-            "uuid": user_data["uuid"],
-            "id": user_data["id"]
+            "uuid": user_data["uuid"]
         }
         
         jwt_token, expires = create_access_token(token_data)
@@ -289,8 +286,7 @@ async def google_login_token(google_request: GoogleLoginRequest):
     token_data = {
         "sub": user_data["username"],
         "role": user_data["role"],
-        "uuid": user_data["uuid"],
-        "id": user_data["id"]
+        "uuid": user_data["uuid"]
     }
     
     # Create access token

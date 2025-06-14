@@ -10,7 +10,6 @@ from backend.services.web.api.auth import get_admin_user
 router = APIRouter(prefix="/users", tags=["users"])
 
 class UserResponse(BaseModel):
-    id: int
     uuid: str
     username: str
     role: str
@@ -70,9 +69,9 @@ async def list_users(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get users: {str(e)}")
 
-@router.get("/{user_id}", response_model=UserResponse)
+@router.get("/{user_uuid}", response_model=UserResponse)
 async def get_user(
-    user_id: int,
+    user_uuid: str,
     current_user: dict = Depends(get_admin_user)
 ):
     """
@@ -80,7 +79,7 @@ async def get_user(
     """
     try:
         db = get_metadata_db()
-        user = db.get_user_by_id(user_id)
+        user = db.get_user_by_uuid(user_uuid)
         
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -92,9 +91,9 @@ async def get_user(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get user: {str(e)}")
 
-@router.put("/{user_id}/role")
+@router.put("/{user_uuid}/role")
 async def update_user_role(
-    user_id: int,
+    user_uuid: str,
     role_update: UserRoleUpdateRequest,
     current_user: dict = Depends(get_admin_user)
 ):
@@ -112,12 +111,12 @@ async def update_user_role(
         db = get_metadata_db()
         
         # Check if user exists
-        user = db.get_user_by_id(user_id)
+        user = db.get_user_by_uuid(user_uuid)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Prevent self-role change
-        if user_id == current_user.get('id'):
+        if user_uuid == current_user.get('uuid'):
             raise HTTPException(status_code=400, detail="Cannot change your own role")
         
         # Prevent changing default admin role
@@ -126,7 +125,7 @@ async def update_user_role(
         
         # Update role
         success = db.update_user_role(
-            user_id=user_id,
+            user_uuid=user_uuid,
             new_role=role_update.role,
             updated_by=current_user['username']
         )
@@ -135,7 +134,7 @@ async def update_user_role(
             raise HTTPException(status_code=500, detail="Failed to update user role")
         
         # Get updated user
-        updated_user = db.get_user_by_id(user_id)
+        updated_user = db.get_user_by_uuid(user_uuid)
         
         return {
             "message": f"User role updated to {role_update.role}",
@@ -147,9 +146,9 @@ async def update_user_role(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update user role: {str(e)}")
 
-@router.post("/{user_id}/ban")
+@router.post("/{user_uuid}/ban")
 async def ban_user(
-    user_id: int,
+    user_uuid: str,
     current_user: dict = Depends(get_admin_user)
 ):
     """
@@ -162,7 +161,7 @@ async def ban_user(
         db = get_metadata_db()
         
         # Check if user exists
-        user = db.get_user_by_id(user_id)
+        user = db.get_user_by_uuid(user_uuid)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
@@ -184,7 +183,7 @@ async def ban_user(
         
         # Ban user
         success = db.ban_user(
-            user_id=user_id,
+            user_uuid=user_uuid,
             banned_by=current_user['username']
         )
         
@@ -200,9 +199,9 @@ async def ban_user(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to ban user: {str(e)}")
 
-@router.post("/{user_id}/unban")
+@router.post("/{user_uuid}/unban")
 async def unban_user(
-    user_id: int,
+    user_uuid: str,
     current_user: dict = Depends(get_admin_user)
 ):
     """
@@ -212,7 +211,7 @@ async def unban_user(
         db = get_metadata_db()
         
         # Check if user exists
-        user = db.get_user_by_id(user_id)
+        user = db.get_user_by_uuid(user_uuid)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
@@ -222,7 +221,7 @@ async def unban_user(
         
         # Unban user
         success = db.unban_user(
-            user_id=user_id,
+            user_uuid=user_uuid,
             unbanned_by=current_user['username']
         )
         

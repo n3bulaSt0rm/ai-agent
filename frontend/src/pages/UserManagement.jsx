@@ -116,7 +116,7 @@ const UserManagement = () => {
   const handleRoleUpdate = async (userId, newRole, username) => {
     const currentUser = JSON.parse(localStorage.getItem('user'));
     
-    if (currentUser.id === userId && newRole !== 'admin') {
+    if (currentUser.uuid === userId && newRole !== 'admin') {
       toast.error('You cannot remove admin role from yourself');
       return;
     }
@@ -158,10 +158,10 @@ const UserManagement = () => {
 
     try {
       if (banAction === 'ban') {
-        await usersApi.banUser(selectedUser.id);
+        await usersApi.banUser(selectedUser.uuid);
         toast.success(`User "${selectedUser.username}" banned successfully`);
       } else {
-        await usersApi.unbanUser(selectedUser.id);
+        await usersApi.unbanUser(selectedUser.uuid);
         toast.success(`User "${selectedUser.username}" unbanned successfully`);
       }
       
@@ -343,7 +343,7 @@ const UserManagement = () => {
               </thead>
               <tbody>
                 {users.map((user) => (
-                  <tr key={user.id}>
+                  <tr key={user.uuid}>
                     <td className="text-center">
                       <span className="document-title">{user.username}</span>
                     </td>
@@ -377,11 +377,11 @@ const UserManagement = () => {
                               {user.role !== 'admin' && !isCurrentUser && !isBanned && (
                                 <button
                                   className="action-icon process-btn"
-                                  onClick={() => handleRoleUpdate(user.id, 'admin', user.username)}
-                                  disabled={actionLoading[`role_${user.id}`]}
+                                  onClick={() => handleRoleUpdate(user.uuid, 'admin', user.username)}
+                                  disabled={actionLoading[`role_${user.uuid}`]}
                                   title="Grant Admin"
                                 >
-                                  {actionLoading[`role_${user.id}`] ? (
+                                  {actionLoading[`role_${user.uuid}`] ? (
                                     <div className="loading-spinner small" />
                                   ) : (
                                     <ShieldCheckIcon className="w-4 h-4" />
@@ -393,11 +393,11 @@ const UserManagement = () => {
                               {user.role === 'admin' && !isCurrentUser && !isDefaultAdmin && !isBanned && (
                                 <button
                                   className="action-icon view-btn"
-                                  onClick={() => handleRoleUpdate(user.id, 'user', user.username)}
-                                  disabled={actionLoading[`role_${user.id}`]}
+                                  onClick={() => handleRoleUpdate(user.uuid, 'user', user.username)}
+                                  disabled={actionLoading[`role_${user.uuid}`]}
                                   title="Revoke Admin"
                                 >
-                                  {actionLoading[`role_${user.id}`] ? (
+                                  {actionLoading[`role_${user.uuid}`] ? (
                                     <div className="loading-spinner small" />
                                   ) : (
                                     <UserMinusIcon className="w-4 h-4" />
@@ -410,10 +410,10 @@ const UserManagement = () => {
                                 <button
                                   className="action-icon process-btn"
                                   onClick={() => handleBanUser(user, 'unban')}
-                                  disabled={actionLoading[`ban_${user.id}`]}
+                                  disabled={actionLoading[`ban_${user.uuid}`]}
                                   title="Unban User"
                                 >
-                                  {actionLoading[`ban_${user.id}`] ? (
+                                  {actionLoading[`ban_${user.uuid}`] ? (
                                     <div className="loading-spinner small" />
                                   ) : (
                                     <CheckCircleIcon className="w-4 h-4" />
@@ -429,10 +429,10 @@ const UserManagement = () => {
                                     <button
                                       className="action-icon delete-btn"
                                       onClick={() => handleBanUser(user, 'ban')}
-                                      disabled={actionLoading[`ban_${user.id}`]}
+                                      disabled={actionLoading[`ban_${user.uuid}`]}
                                       title="Ban User"
                                     >
-                                      {actionLoading[`ban_${user.id}`] ? (
+                                      {actionLoading[`ban_${user.uuid}`] ? (
                                         <div className="loading-spinner small" />
                                       ) : (
                                         <NoSymbolIcon className="w-4 h-4" />

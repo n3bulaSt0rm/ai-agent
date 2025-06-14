@@ -38,15 +38,14 @@ class MetadataDB:
                 description TEXT,
                 file_created_at TEXT,
                 updated_at TEXT,
-                uploaded_by TEXT DEFAULT 'admin'
+                uploaded_by TEXT
             )
             ''')
             
             # Users table
             self.conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uuid TEXT NOT NULL UNIQUE,
+                uuid TEXT PRIMARY KEY,
                 username TEXT NOT NULL UNIQUE,
                 password TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
@@ -210,7 +209,7 @@ class MetadataDB:
             List of user records (without passwords)
         """
         try:
-            query = "SELECT id, uuid, username, role, created_at, updated_at, updated_by FROM users"
+            query = "SELECT uuid, username, role, created_at, updated_at, updated_by FROM users"
             params = []
             
             if search_query:
@@ -256,12 +255,12 @@ class MetadataDB:
             print(f"Error getting users count: {e}")
             return 0
     
-    def update_user_role(self, user_id: int, new_role: str, updated_by: str) -> bool:
+    def update_user_role(self, user_uuid: str, new_role: str, updated_by: str) -> bool:
         """
         Update user role.
         
         Args:
-            user_id: ID of the user
+            user_uuid: UUID of the user
             new_role: New role ('admin' or 'user')
             updated_by: Username of who made the update
             
@@ -276,22 +275,22 @@ class MetadataDB:
             
             with self.conn:
                 self.conn.execute(
-                    "UPDATE users SET role = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-                    (new_role, now, updated_by, user_id)
+                    "UPDATE users SET role = ?, updated_at = ?, updated_by = ? WHERE uuid = ?",
+                    (new_role, now, updated_by, user_uuid)
                 )
             
-            print(f"Updated user {user_id} role to {new_role} by {updated_by}")
+            print(f"Updated user {user_uuid} role to {new_role} by {updated_by}")
             return True
         except Exception as e:
             print(f"Error updating user role: {e}")
             return False
     
-    def ban_user(self, user_id: int, banned_by: str) -> bool:
+    def ban_user(self, user_uuid: str, banned_by: str) -> bool:
         """
         Ban a user.
         
         Args:
-            user_id: ID of the user to ban
+            user_uuid: UUID of the user to ban
             banned_by: Username of who performed the ban
             
         Returns:
@@ -299,7 +298,7 @@ class MetadataDB:
         """
         try:
             # Check if user exists and is not the default admin
-            result = self.conn.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            result = self.conn.execute("SELECT username FROM users WHERE uuid = ?", (user_uuid,))
             user = result.fetchone()
             
             if not user:
@@ -314,22 +313,22 @@ class MetadataDB:
             
             with self.conn:
                 self.conn.execute(
-                    "UPDATE users SET is_banned = 1, updated_at = ?, updated_by = ? WHERE id = ?",
-                    (now, banned_by, user_id)
+                    "UPDATE users SET is_banned = 1, updated_at = ?, updated_by = ? WHERE uuid = ?",
+                    (now, banned_by, user_uuid)
                 )
             
-            print(f"Banned user {user_id} ({user['username']}) by {banned_by}")
+            print(f"Banned user {user_uuid} ({user['username']}) by {banned_by}")
             return True
         except Exception as e:
             print(f"Error banning user: {e}")
             return False
     
-    def unban_user(self, user_id: int, unbanned_by: str) -> bool:
+    def unban_user(self, user_uuid: str, unbanned_by: str) -> bool:
         """
         Unban a user.
         
         Args:
-            user_id: ID of the user to unban
+            user_uuid: UUID of the user to unban
             unbanned_by: Username of who performed the unban
             
         Returns:
@@ -337,7 +336,7 @@ class MetadataDB:
         """
         try:
             # Check if user exists
-            result = self.conn.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            result = self.conn.execute("SELECT username FROM users WHERE uuid = ?", (user_uuid,))
             user = result.fetchone()
             
             if not user:
@@ -347,30 +346,30 @@ class MetadataDB:
             
             with self.conn:
                 self.conn.execute(
-                    "UPDATE users SET is_banned = 0, updated_at = ?, updated_by = ? WHERE id = ?",
-                    (now, unbanned_by, user_id)
+                    "UPDATE users SET is_banned = 0, updated_at = ?, updated_by = ? WHERE uuid = ?",
+                    (now, unbanned_by, user_uuid)
                 )
             
-            print(f"Unbanned user {user_id} ({user['username']}) by {unbanned_by}")
+            print(f"Unbanned user {user_uuid} ({user['username']}) by {unbanned_by}")
             return True
         except Exception as e:
             print(f"Error unbanning user: {e}")
             return False
     
-    def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+    def get_user_by_uuid(self, user_uuid: str) -> Optional[Dict[str, Any]]:
         """
-        Get a user by ID.
+        Get a user by UUID.
         
         Args:
-            user_id: ID of the user
+            user_uuid: UUID of the user
             
         Returns:
             User data dict (without password) or None if not found
         """
         try:
             result = self.conn.execute(
-                "SELECT id, uuid, username, role, created_at, updated_at, updated_by FROM users WHERE id = ?", 
-                (user_id,)
+                "SELECT uuid, username, role, created_at, updated_at, updated_by FROM users WHERE uuid = ?", 
+                (user_uuid,)
             )
             user = result.fetchone()
             
@@ -378,12 +377,13 @@ class MetadataDB:
                 return dict(user)
             return None
         except Exception as e:
-            print(f"Error getting user by ID: {e}")
+            print(f"Error getting user by UUID: {e}")
             return None
     
     def add_pdf_file(self, filename: str, file_size: int, 
                      content_type: str, object_url: str, description: str = None, 
-                     file_created_at: str = None, pages: int = 0, uuid: str = None, keywords: str = None) -> int:
+                     file_created_at: str = None, pages: int = 0, uuid: str = None, keywords: str = None,
+                     uploaded_by: str = None) -> int:
         """
         Add a new file to the database.
         
@@ -397,6 +397,7 @@ class MetadataDB:
             pages: Number of pages in the document
             uuid: Unique identifier for the file
             keywords: JSON string containing keywords
+            uploaded_by: Username of the user who uploaded the file
             
         Returns:
             ID of the new file record
@@ -411,10 +412,10 @@ class MetadataDB:
             result = self.conn.execute(
                 '''INSERT INTO files_management 
                    (uuid, filename, file_size, content_type, object_url,
-                    upload_at, description, file_created_at, updated_at, pages, status, keywords) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    upload_at, description, file_created_at, updated_at, pages, status, keywords, uploaded_by) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (uuid, filename, file_size, content_type, object_url,
-                 now, description, file_created_at or now, now, pages, 'pending', keywords)
+                 now, description, file_created_at or now, now, pages, 'pending', keywords, uploaded_by)
             )
             file_id = result.lastrowid
             
@@ -1112,7 +1113,7 @@ class MetadataDB:
             List of user records (without passwords)
         """
         try:
-            query = "SELECT id, uuid, username, role, created_at, updated_at, updated_by, is_banned FROM users"
+            query = "SELECT uuid, username, role, created_at, updated_at, updated_by, is_banned FROM users"
             params = []
             where_conditions = []
             

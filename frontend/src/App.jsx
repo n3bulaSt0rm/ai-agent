@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 
@@ -71,57 +71,69 @@ const NotFound = () => (
   </div>
 );
 
+// Layout component that conditionally renders Navbar
+const AppLayout = ({ children }) => {
+  const location = useLocation();
+  const showNavbar = location.pathname !== '/login';
+  
+  return (
+    <div className="app">
+      {showNavbar && <Navbar />}
+      <main className="content">
+        {children}
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <BrowserRouter>
-          <div className="app">
-            <Navbar />
-            <main className="content">
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/auth/callback" element={<AuthCallback />} />
-                <Route path="/dashboard" element={
-                  <ProtectedRoute>
-                    <AdminRoute>
-                      <Dashboard />
-                    </AdminRoute>
-                  </ProtectedRoute>
-                } />
-                <Route path="/documents" element={
-                  <ProtectedRoute>
-                    <AdminRoute>
-                      <FilesList />
-                    </AdminRoute>
-                  </ProtectedRoute>
-                } />
-                <Route path="/files" element={<Navigate to="/documents" replace />} />
-                <Route path="/files/:id" element={
-                  <ProtectedRoute>
-                    <AdminRoute>
-                      <FileDetail />
-                    </AdminRoute>
-                  </ProtectedRoute>
-                } />
-                <Route path="/search" element={
-                  <ProtectedRoute>
-                    <IntelligentSearch />
-                  </ProtectedRoute>
-                } />
-                <Route path="/users" element={
-                  <ProtectedRoute>
-                    <AdminRoute>
-                      <UserManagement />
-                    </AdminRoute>
-                  </ProtectedRoute>
-                } />
-                <Route path="/" element={<RoleBasedRedirect />} />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </main>
-            <Footer />
-          </div>
+          <AppLayout>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/auth/callback" element={<AuthCallback />} />
+              <Route path="/dashboard" element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <Dashboard />
+                  </AdminRoute>
+                </ProtectedRoute>
+              } />
+              <Route path="/documents" element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <FilesList />
+                  </AdminRoute>
+                </ProtectedRoute>
+              } />
+              <Route path="/files" element={<Navigate to="/documents" replace />} />
+              <Route path="/files/:id" element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <FileDetail />
+                  </AdminRoute>
+                </ProtectedRoute>
+              } />
+              <Route path="/search" element={
+                <ProtectedRoute>
+                  <IntelligentSearch />
+                </ProtectedRoute>
+              } />
+              <Route path="/users" element={
+                <ProtectedRoute>
+                  <AdminRoute>
+                    <UserManagement />
+                  </AdminRoute>
+                </ProtectedRoute>
+              } />
+              <Route path="/" element={<RoleBasedRedirect />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </AppLayout>
           <Toaster 
             position="top-right"
             toastOptions={{

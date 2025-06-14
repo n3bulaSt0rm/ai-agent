@@ -45,7 +45,8 @@ const Navbar = () => {
     setIsMobileMenuOpen(false);
   }, [location.pathname]);
 
-  if (!isAuthenticated) return null;
+  // Don't render navbar on login page
+  if (location.pathname === '/login' || !isAuthenticated) return null;
 
   return (
     <nav className={`navbar ${isClient && isScrolled ? 'scrolled' : ''}`}>

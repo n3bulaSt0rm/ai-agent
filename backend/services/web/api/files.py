@@ -108,7 +108,8 @@ async def upload_file(
             file_created_at=file_created_at,
             keywords=keywords_str,
             uuid=unique_id,
-            pages=file_pages
+            pages=file_pages,
+            uploaded_by=current_user['username']
         )
         
         # Format response to match frontend expectations
@@ -127,7 +128,7 @@ async def upload_file(
             "keywords": keyword_list,
             "pages": file_pages,
             "type": content_type,
-            "uploadedBy": "admin"
+            "uploadedBy": current_user['username']
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")

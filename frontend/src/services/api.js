@@ -411,48 +411,48 @@ const usersApi = {
     }
   },
 
-  // Get a single user by ID
-  getUser: async (userId) => {
+  // Get a single user by UUID
+  getUser: async (userUuid) => {
     try {
-      const response = await apiClient.get(`/users/${userId}`);
+      const response = await apiClient.get(`/users/${userUuid}`);
       return response.data;
     } catch (error) {
-      console.error(`Error fetching user ${userId}:`, error);
+      console.error(`Error fetching user ${userUuid}:`, error);
       throw error;
     }
   },
 
   // Update user role
-  updateUserRole: async (userId, role) => {
+  updateUserRole: async (userUuid, role) => {
     try {
-      const response = await apiClient.put(`/users/${userId}/role`, {
+      const response = await apiClient.put(`/users/${userUuid}/role`, {
         role: role
       });
       return response.data;
     } catch (error) {
-      console.error(`Error updating role for user ${userId}:`, error);
+      console.error(`Error updating role for user ${userUuid}:`, error);
       throw error;
     }
   },
 
   // Ban user
-  banUser: async (userId) => {
+  banUser: async (userUuid) => {
     try {
-      const response = await apiClient.post(`/users/${userId}/ban`);
+      const response = await apiClient.post(`/users/${userUuid}/ban`);
       return response.data;
     } catch (error) {
-      console.error(`Error banning user ${userId}:`, error);
+      console.error(`Error banning user ${userUuid}:`, error);
       throw error;
     }
   },
 
   // Unban user
-  unbanUser: async (userId) => {
+  unbanUser: async (userUuid) => {
     try {
-      const response = await apiClient.post(`/users/${userId}/unban`);
+      const response = await apiClient.post(`/users/${userUuid}/unban`);
       return response.data;
     } catch (error) {
-      console.error(`Error unbanning user ${userId}:`, error);
+      console.error(`Error unbanning user ${userUuid}:`, error);
       throw error;
     }
   },
