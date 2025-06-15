@@ -20,6 +20,7 @@ import ClockIcon from '@heroicons/react/24/outline/ClockIcon';
 import EyeIcon from '@heroicons/react/24/outline/EyeIcon';
 import CalendarIcon from '@heroicons/react/24/outline/CalendarIcon';
 import PlusIcon from '@heroicons/react/24/outline/PlusIcon';
+import PencilIcon from '@heroicons/react/24/outline/PencilIcon';
 
 // Removed all mock data - will now use data from backend API
 
@@ -107,6 +108,10 @@ const FilesList = () => {
   
   // Add function to handle file_created_at updates
   const [fileCreatedAtInput, setFileCreatedAtInput] = useState('');
+  
+  // New state for description editing
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionInput, setDescriptionInput] = useState('');
   
   // Format the current date as DD/MM/YYYY for the initial display
   useEffect(() => {
@@ -507,6 +512,17 @@ const FilesList = () => {
     
     if (!selectedFile.fileCreatedAt) {
       toast.error('Please set the Document Creation Date before uploading');
+      
+      // Highlight the date field in the FileUploader component
+      const dateField = document.getElementById('fileCreatedAt');
+      if (dateField) {
+        dateField.classList.add('field-error-highlight');
+        // Remove the highlight after 2 seconds
+        setTimeout(() => {
+          dateField.classList.remove('field-error-highlight');
+        }, 2000);
+      }
+      
       return;
     }
     
@@ -659,12 +675,19 @@ const FilesList = () => {
   };
   
   const handleViewDetail = (doc) => {
+    console.log("Opening document detail with data:", doc);
     setFileToView({
       ...doc,
       keywords: doc.keywords || [] // Get keywords directly
     });
     setKeywordsInput(doc.keywords ? doc.keywords.join(', ') : '');
     setFileCreatedAtInput(doc.fileCreatedAt || '');
+    
+    // Make sure description is properly initialized
+    console.log("Setting description input with:", doc.description);
+    setDescriptionInput(doc.description || '');
+    setIsEditingDescription(false);
+    
     setShowDetailModal(true);
   };
   
@@ -815,6 +838,33 @@ const FilesList = () => {
     } catch (error) {
       console.error('Error updating file creation date:', error);
       toast.error('Failed to update file creation date');
+    } finally {
+      setLoadingAction({ isLoading: false, message: '' });
+    }
+  };
+  
+  // Add function to handle description update
+  const handleSaveDescription = async () => {
+    if (!fileToView) return;
+    
+    try {
+      // Show loading overlay
+      setLoadingAction({ isLoading: true, message: 'Updating description...' });
+      
+      // Call API to update description
+      await filesApi.updateDescription(fileToView.id, descriptionInput);
+      
+      // Update local state
+      setFileToView({
+        ...fileToView,
+        description: descriptionInput
+      });
+      
+      toast.success('Description updated successfully');
+      
+    } catch (error) {
+      console.error('Error updating description:', error);
+      toast.error('Failed to update description');
     } finally {
       setLoadingAction({ isLoading: false, message: '' });
     }
@@ -1342,16 +1392,107 @@ const FilesList = () => {
                   </div>
                   <div className="detail-row">
                     <span className="detail-label">Document Creation Date:</span>
-                    <span className="detail-value">{formatDate(fileToView.fileCreatedAt)}</span>
+                    <div className="detail-value">
+                      <div style={{ 
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}>
+                        <span style={{ 
+                          color: fileCreatedAtInput !== fileToView.fileCreatedAt ? '#2563eb' : '#1e293b',
+                          fontWeight: fileCreatedAtInput !== fileToView.fileCreatedAt ? '600' : 'normal',
+                        }}>
+                          {fileCreatedAtInput !== fileToView.fileCreatedAt ? formatDate(fileCreatedAtInput) : formatDate(fileToView.fileCreatedAt)} 
+                          {fileCreatedAtInput !== fileToView.fileCreatedAt && " (click Update to save)"}
+                        </span>
+
+                        {/* Calendar icon and date picker */}
+                        <label 
+                          htmlFor="fileCreatedAtPicker" 
+                          className="date-picker-label"
+                        >
+                          <svg 
+                            xmlns="http://www.w3.org/2000/svg" 
+                            fill="none" 
+                            viewBox="0 0 24 24" 
+                            strokeWidth={1.5} 
+                            stroke="currentColor" 
+                            style={{width: '20px', height: '20px'}}
+                          >
+                            <path 
+                              strokeLinecap="round" 
+                              strokeLinejoin="round" 
+                              d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" 
+                            />
+                          </svg>
+                          
+                          <input
+                            type="date"
+                            id="fileCreatedAtPicker"
+                            value={toInputDateFormat(fileCreatedAtInput)}
+                            onChange={(e) => setFileCreatedAtInput(e.target.value)}
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 
-                {fileToView.description && (
-                  <div className="detail-section">
+                <div className="detail-section">
+                  <div className="description-header">
                     <h4 className="detail-section-title">Description</h4>
-                    <div className="detail-description">{fileToView.description}</div>
                   </div>
-                )}
+                  {isEditingDescription ? (
+                    <div className="edit-description">
+                      <textarea
+                        value={descriptionInput}
+                        onChange={(e) => setDescriptionInput(e.target.value)}
+                        className="description-textarea"
+                        rows={4}
+                        placeholder="Enter document description..."
+                      />
+                      <div className="edit-actions">
+                        <button
+                          className="btn-secondary btn-sm"
+                          onClick={() => {
+                            setIsEditingDescription(false);
+                            setDescriptionInput(fileToView.description || '');
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <p 
+                        className="document-description" 
+                        onClick={() => setIsEditingDescription(true)}
+                        style={{ 
+                          cursor: 'pointer',
+                          padding: '8px',
+                          border: '1px dashed transparent',
+                          borderRadius: '4px',
+                          minHeight: '40px',
+                          color: fileToView.description ? '#1e293b' : '#94a3b8',
+                          fontStyle: fileToView.description ? 'normal' : 'italic',
+                          transition: 'all 0.2s ease',
+                          backgroundColor: 'transparent',
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#f1f5f9';
+                          e.currentTarget.style.border = '1px dashed #cbd5e1';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                          e.currentTarget.style.border = '1px dashed transparent';
+                        }}
+                      >
+                        {fileToView.description || "No description (click to add)"}
+                      </p>
+                    </div>
+                  )}
+                </div>
                 
                 {/* Keywords section - hidden but logic maintained */}
                 <div className="detail-section keywords-section" style={{ display: 'none' }}>
@@ -1386,35 +1527,26 @@ const FilesList = () => {
                     </div>
                   </div>
                 </div>
-                
-                <div className="detail-section file-date-section">
-                  <h4 className="detail-section-title">Edit Document Creation Date</h4>
-                  <div className="input-group">
-                    <label htmlFor="fileCreatedAt">Update Document Creation Date:</label>
-                    <input
-                      type="date"
-                      id="fileCreatedAt"
-                      value={toInputDateFormat(fileCreatedAtInput)}
-                      onChange={(e) => setFileCreatedAtInput(e.target.value)}
-                    />
-                  </div>
-                  <button className="btn-primary" 
-                    onClick={handleFileCreatedAtUpdate}>
-                    Update Creation Date
-                  </button>
-                </div>
               </div>
               
               <div className="detail-actions">
-                <a 
-                  href={fileToView.view_url} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="btn-secondary"
+                <button 
+                  className="btn-primary"
+                  onClick={() => {
+                    // Apply both description and creation date updates
+                    if (fileCreatedAtInput !== fileToView.fileCreatedAt) {
+                      handleFileCreatedAtUpdate();
+                    }
+                    if (descriptionInput !== fileToView.description) {
+                      handleSaveDescription();
+                    }
+                    // Close the modal after updates
+                    setShowDetailModal(false);
+                  }}
                 >
-                  <EyeIcon className="w-5 h-5 mr-2" />
-                  View Document
-                </a>
+                  <PencilIcon className="w-5 h-5 mr-2" />
+                  Update Document
+                </button>
                 {fileToView.status === 'pending_upload' || fileToView.status === 'pending' ? (
                   <button 
                     className="btn-primary"
@@ -1563,18 +1695,12 @@ const FilesList = () => {
         .date-field input[type="date"] {
           width: 100%;
           height: 100%;
-          padding: 0 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 4px;
-          font-size: 14px;
-          background-color: white;
-          color: #64748b;
-          font-family: 'Inter', sans-serif;
-          box-sizing: border-box;
-          z-index: 1;
-          position: relative;
-          opacity: 0; /* Hide the default date input */
+          position: absolute;
+          top: 0;
+          left: 0;
+          opacity: 0;
           cursor: pointer;
+          z-index: 2;
         }
         
         .date-label {
@@ -1592,6 +1718,7 @@ const FilesList = () => {
           background-color: white;
           pointer-events: none;
           box-sizing: border-box;
+          z-index: 1;
         }
         
         .date-display {
@@ -1659,6 +1786,71 @@ const FilesList = () => {
           justify-content: center;
           cursor: pointer;
           flex-shrink: 0;
+        }
+        
+        /* Description editing styles */
+        .description-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+        }
+        
+        .description-textarea {
+          width: 100%;
+          padding: 10px;
+          border: 1px solid #e2e8f0;
+          border-radius: 4px;
+          min-height: 100px;
+          font-family: inherit;
+          font-size: 14px;
+          color: #000000;
+          margin-bottom: 10px;
+        }
+        
+        .document-description {
+          font-size: 14px;
+          color: #1e293b;
+          white-space: pre-line;
+          margin: 0;
+          padding: 8px 0;
+        }
+        
+        .edit-actions {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+        
+        .btn-sm {
+          padding: 4px 10px;
+          font-size: 12px;
+        }
+        
+        /* Date picker specific styles */
+        .date-picker-label {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 38px;
+          height: 38px;
+          border-radius: 4px;
+          background-color: #f8fafc;
+          border: 1px solid #e2e8f0;
+          cursor: pointer;
+          color: #64748b;
+          position: relative;
+        }
+        
+        .date-picker-label input[type="date"] {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          opacity: 0;
+          cursor: pointer;
+          z-index: 2;
         }
       `}</style>
     </div>

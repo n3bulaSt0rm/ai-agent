@@ -285,13 +285,23 @@ const filesApi = {
     }
   },
   
-  // Add updateFileDescription method to the API service
+  // Add updateFileDescription method to the API service if it doesn't exist
   updateFileDescription: async (fileId, description) => {
     try {
       const response = await apiClient.put(`/files/update/${fileId}`, {
         description: description
       });
       return response.data;
+    } catch (error) {
+      console.error(`Error updating description for file ${fileId}:`, error);
+      throw error;
+    }
+  },
+
+  // Add updateDescription as a more convenient alias
+  updateDescription: async (fileId, description) => {
+    try {
+      return filesApi.updateFileDescription(fileId, description);
     } catch (error) {
       throw error;
     }

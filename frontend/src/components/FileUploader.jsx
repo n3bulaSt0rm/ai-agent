@@ -50,13 +50,14 @@ const FileUploader = ({
   const [fileCreatedAt, setFileCreatedAt] = useState('');
   const [keywords, setKeywords] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [description, setDescription] = useState('');
 
   // Use effect to update parent component when metadata changes
   useEffect(() => {
     if (selectedFile) {
       updateFileMetadata(false);
     }
-  }, [keywords, fileCreatedAt]);
+  }, [keywords, fileCreatedAt, description]);
 
   // Add a function to highlight the date field with an error
   const highlightDateField = () => {
@@ -74,13 +75,6 @@ const FileUploader = ({
   const updateFileMetadata = (showProcessing = true) => {
     if (!selectedFile) return false;
     
-    // Validate that document current date is filled
-    if (!fileCreatedAt) {
-      setErrorMessage(`Document Creation Date is required`);
-      highlightDateField();
-      return false;
-    }
-    
     // Clear any previous errors
     setErrorMessage('');
     
@@ -96,11 +90,13 @@ const FileUploader = ({
     });
     
     // Add metadata
-    fileWithMetadata.fileCreatedAt = fileCreatedAt;
+    fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
+    fileWithMetadata.description = description || '';
     fileWithMetadata.keywords = keywords || '';
     
     console.log('Updating file with keywords:', keywords);
     console.log('Updating file with date:', fileCreatedAt);
+    console.log('Updating file with description:', description);
         
     // Update the selected file
     setSelectedFile(fileWithMetadata);
@@ -118,11 +114,6 @@ const FileUploader = ({
 
   // Handle click on the custom button
   const handleButtonClick = () => {
-    if (selectedFile && !fileCreatedAt) {
-      setErrorMessage('Document Creation Date is required');
-      highlightDateField();
-      return;
-    }
     fileInputRef.current.click();
   };
 
@@ -135,6 +126,11 @@ const FileUploader = ({
   // Handle keywords change
   const handleKeywordsChange = (e) => {
     setKeywords(e.target.value);
+  };
+
+  // Handle description change
+  const handleDescriptionChange = (e) => {
+    setDescription(e.target.value);
   };
 
   // Handle date change
@@ -198,10 +194,12 @@ const FileUploader = ({
     
     // Add metadata - make sure fileCreatedAt exists, even if empty
     fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
+    fileWithMetadata.description = description || '';
     fileWithMetadata.keywords = keywords || '';
     
     console.log('Setting file with keywords:', keywords);
     console.log('Setting file with date:', fileCreatedAt);
+    console.log('Setting file with description:', description);
     console.log('File size is automatically set:', fileWithMetadata.size);
     
     // Update state
@@ -274,6 +272,27 @@ const FileUploader = ({
                   className="form-control"
                   style={{ color: "#000000" }}
                   required
+                />
+              </div>
+              
+              <div className="form-group">
+                <label htmlFor="description">Description:</label>
+                <textarea 
+                  id="description" 
+                  value={description}
+                  onChange={handleDescriptionChange}
+                  placeholder="Enter document description..."
+                  className="form-control"
+                  style={{ 
+                    color: "#000000",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "4px",
+                    padding: "8px",
+                    minHeight: "80px",
+                    resize: "vertical",
+                    width: "100%"
+                  }}
+                  rows={3}
                 />
               </div>
               

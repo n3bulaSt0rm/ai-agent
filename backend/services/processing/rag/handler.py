@@ -392,13 +392,16 @@ class GmailHandler:
                 logger.debug(f"Processing question group {i//2 + 1}: {len(group)} questions")
                 
                 group_info = ""
+                group_qa_info = ""  # Separate info for EMAIL_QA results
                 group_queries = []
                 
                 for j, question in enumerate(group):
                     group_queries.append(question)
                     
-                    search_results = self.query_module.process_single_query(question)
+                    # Search in both collections using optimized method
+                    search_results, qa_results = self._search_multiple_collections(question)
                     
+                    # Format main collection results
                     if search_results:
                         group_info += f"Câu hỏi {j+1}: {question}\n"
                         for k, result_item in enumerate(search_results):
@@ -415,19 +418,40 @@ class GmailHandler:
                             group_info += f"\n{content}\n\n"
                     else:
                         group_info += f"Câu hỏi {j+1}: {question}\nKhông tìm thấy thông tin liên quan.\n\n"
+                    
+                    # Format EMAIL_QA collection results (without source citation requirement)
+                    if qa_results:
+                        group_qa_info += f"Câu hỏi {j+1}: {question}\n"
+                        for k, qa_item in enumerate(qa_results):
+                            qa_content = qa_item.get("content", "") if isinstance(qa_item, dict) else str(qa_item)
+                            qa_metadata = qa_item.get("metadata", {}) if isinstance(qa_item, dict) else {}
+                            qa_file_created_at = qa_metadata.get("file_created_at")
+                            
+                            group_qa_info += f"Q&A {k+1}:"
+                            if qa_file_created_at:
+                                group_qa_info += f" (Cập nhật: {qa_file_created_at})"
+                            group_qa_info += f"\n{qa_content}\n\n"
                 
+                # Create combined summarization prompt
                 summarization_prompt = f"""
                 Hãy tóm tắt lại các nội dung liên quan đến các câu hỏi sau một cách chính xác, đầy đủ thông tin, súc tích:
                 
                 Các câu hỏi: {', '.join(group_queries)}
                 
-                Thông tin liên quan:
+                Thông tin từ tài liệu chính thức:
                 {group_info}
                 
+                Thông tin từ Q&A trước đây:
+                {group_qa_info}
+                
                 LƯU Ý QUAN TRỌNG:
-                - Nếu có nhiều tài liệu về cùng một chủ đề với các ngày cập nhật khác nhau, chỉ sử dụng thông tin từ tài liệu có ngày cập nhật mới nhất và thêm thông tin trích dẫn ngày cập nhật đó.
-                - Khi có thông tin nguồn tài liệu, hãy ghi rõ nguồn trong tóm tắt để có thể trích dẫn sau này.
-                - Đối với thông tin chỉ có một tài liệu hoặc nhiều tài liệu cùng ngày cập nhật hoặc không có ngày cập nhật rõ ràng thì không cần ghi ngày cập nhật.
+                - Ưu tiên thông tin có ngày cập nhật gần đây nhất từ cả hai nguồn (tài liệu chính thức và Q&A).
+                - Nếu có nhiều thông tin về cùng một chủ đề với các ngày cập nhật khác nhau, chỉ sử dụng thông tin từ nguồn có ngày cập nhật mới nhất.
+                - Khi có thông tin nguồn từ tài liệu chính thức, hãy ghi rõ nguồn trong tóm tắt để có thể trích dẫn sau này.
+                - Thông tin từ Q&A trước đây có thể được sử dụng nhưng không cần trích dẫn nguồn cụ thể.
+                - Đối với thông tin không có ngày cập nhật rõ ràng, coi như cũ hơn so với thông tin có ngày cập nhật.
+                - Khi so sánh thông tin từ tài liệu chính thức và Q&A có cùng ngày cập nhật, ưu tiên thông tin từ tài liệu chính thức.
+                - Luôn ghi rõ ngày cập nhật thông tin trong tóm tắt khi có (ví dụ: "Theo thông tin cập nhật ngày 15/03/2024...").
                 """
                 
                 try:
@@ -775,8 +799,10 @@ YÊU CẦU SOẠN EMAIL:
 - Viết email phản hồi bằng tiếng Việt chuẩn, chuyên nghiệp
 - Định dạng: văn bản thuần (plain text), KHÔNG dùng markdown
 - Cấu trúc: lời chào, nội dung trả lời từng câu hỏi, lời kết thân thiện
-- Ghi rõ ngày cập nhật thông tin nếu có
-- Trích dẫn nguồn thông tin ở cuối email nếu cần
+- Ghi rõ ngày cập nhật thông tin khi có (ưu tiên thông tin mới nhất)
+- Trích dẫn nguồn thông tin ở cuối email nếu cần (chỉ với thông tin từ tài liệu chính thức)
+- Thông tin từ Q&A trước đây có thể sử dụng trực tiếp mà không cần trích dẫn nguồn
+- Khi có nhiều thông tin về cùng chủ đề, ưu tiên và chỉ sử dụng thông tin có ngày cập nhật gần đây nhất
 - Nếu thiếu thông tin, hướng dẫn sinh viên liên hệ bộ phận phù hợp
 - Ký tên: "{settings.GMAIL_EMAIL_ADDRESS or 'Phòng Công tác Sinh viên'}"
 
@@ -984,7 +1010,41 @@ Viết phản hồi ngay dưới đây (chỉ trả về nội dung thuần (pla
             logger.warning(f"Error processing text with Vietnamese Query Module: {e}")
             return "Xin lỗi, có lỗi xảy ra khi xử lý văn bản. Vui lòng thử lại sau."
 
-
+    def _search_multiple_collections(self, question: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Search in both main collection and EMAIL_QA collection using existing query module
+        
+        Args:
+            question: The question to search for
+            
+        Returns:
+            Tuple of (main_collection_results, email_qa_results)
+        """
+        if self.query_module is None:
+            logger.warning("Query module not initialized")
+            return [], []
+        
+        # Store original collection name
+        original_collection = self.query_module.embedding_module.qdrant_manager.collection_name
+        
+        try:
+            # Search in main collection (already configured)
+            main_results = self.query_module.process_single_query(question)
+            
+            # Temporarily switch to EMAIL_QA collection
+            self.query_module.embedding_module.qdrant_manager.collection_name = settings.EMAIL_QA_COLLECTION
+            qa_results = self.query_module.process_single_query(question)
+            
+            logger.debug(f"Found {len(main_results)} results in main collection and {len(qa_results)} results in EMAIL_QA collection for question: {question[:50]}...")
+            
+            return main_results, qa_results
+            
+        except Exception as e:
+            logger.error(f"Error searching multiple collections: {e}")
+            return [], []
+        finally:
+            # Restore original collection name
+            self.query_module.embedding_module.qdrant_manager.collection_name = original_collection
 
     async def run(self) -> None:
         
