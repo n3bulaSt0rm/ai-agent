@@ -19,7 +19,7 @@ const Login = () => {
   useEffect(() => {
     // Check if user is already authenticated and redirect accordingly
     if (isAuthenticated && user) {
-      if (user.role === 'admin') {
+      if (user.role === 'admin' || user.role === 'manager') {
         navigate('/dashboard');
       } else {
         navigate('/search');
@@ -122,7 +122,7 @@ const Login = () => {
           const storedUser = localStorage.getItem('user');
           if (storedUser) {
             const userData = JSON.parse(storedUser);
-            if (userData.role === 'admin') {
+            if (userData.role === 'admin' || userData.role === 'manager') {
               navigate('/dashboard');
             } else {
               navigate('/search'); // Navigate to intelligent search for regular users

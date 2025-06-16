@@ -274,9 +274,14 @@
   color: #a855f7;
 }
 
+.status-badge.manager {
+  background-color: rgba(148, 163, 184, 0.1);
+  color: #64748b;
+}
+
 .status-badge.user {
-  background-color: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
+  background-color: rgba(148, 163, 184, 0.1);
+  color: #64748b;
 }
 
 .status-badge.banned {

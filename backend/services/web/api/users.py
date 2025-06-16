@@ -5,7 +5,7 @@ from datetime import datetime
 
 from backend.core.config import settings
 from backend.db.metadata import get_metadata_db
-from backend.services.web.api.auth import get_admin_user
+from backend.services.web.api.auth import get_admin_user, get_admin_or_manager_user
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -35,7 +35,7 @@ async def list_users(
     sort_by: Optional[str] = Query(None, description="Field to sort by (username, role, created_at)"),
     sort_order: Optional[str] = Query("desc", description="Sort order (asc, desc)"),
     date: Optional[str] = Query(None, description="Filter by creation date (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
     Get list of users (admin only) with pagination, search, sorting and filtering
@@ -72,7 +72,7 @@ async def list_users(
 @router.get("/{user_uuid}", response_model=UserResponse)
 async def get_user(
     user_uuid: str,
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
     Get specific user by ID (admin only)
@@ -95,18 +95,18 @@ async def get_user(
 async def update_user_role(
     user_uuid: str,
     role_update: UserRoleUpdateRequest,
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_user)  # Only admin can change roles
 ):
     """
     Update user role (admin only with restrictions)
     - Cannot change your own role
     - Cannot change default admin role
-    - All admins can grant/revoke user roles
-    - All admins can grant/revoke admin roles (except default admin)
+    - Only admin can grant/revoke manager roles
+    - Manager can only be granted/revoked by admin
     """
     try:
-        if role_update.role not in ['admin', 'user']:
-            raise HTTPException(status_code=400, detail="Role must be 'admin' or 'user'")
+        if role_update.role not in ['admin', 'manager', 'user']:
+            raise HTTPException(status_code=400, detail="Role must be 'admin', 'manager', or 'user'")
         
         db = get_metadata_db()
         
@@ -122,6 +122,13 @@ async def update_user_role(
         # Prevent changing default admin role
         if user['username'] == settings.ADMIN_USERNAME:
             raise HTTPException(status_code=400, detail="Cannot change default admin role")
+        
+        # Prevent granting admin role through API
+        if role_update.role == 'admin':
+            raise HTTPException(status_code=403, detail="Cannot grant admin role through this interface")
+        
+        # Only admin can grant or revoke manager role
+        # Admin role can only be created through direct database access or system configuration
         
         # Update role
         success = db.update_user_role(
@@ -149,12 +156,12 @@ async def update_user_role(
 @router.post("/{user_uuid}/ban")
 async def ban_user(
     user_uuid: str,
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
-    Ban user (admin only with restrictions)
-    - Only default admin (username='admin') can ban other admins
-    - Other admins can only ban regular users
+    Ban user (admin and manager with restrictions)
+    - Only admin can ban manager or other admin users  
+    - Manager can only ban regular users
     - Cannot ban yourself
     """
     try:
@@ -173,12 +180,13 @@ async def ban_user(
         if user['username'] == settings.ADMIN_USERNAME:
             raise HTTPException(status_code=400, detail="Cannot ban default admin user")
         
-        # Permission check: Only default admin can ban other admins
-        if user['role'] == 'admin' and current_user['username'] != settings.ADMIN_USERNAME:
-            raise HTTPException(status_code=403, detail="Only default admin can ban other admin users")
+        # Permission check: Only admin can ban managers or other admins
+        if user['role'] in ['admin', 'manager'] and current_user['role'] != 'admin':
+            raise HTTPException(status_code=403, detail="Only admin can ban manager or admin users")
         
         # Check if user is already banned
-        if user.get('is_banned', 0) == 1:
+        is_banned = user.get('is_banned', 0)
+        if is_banned == 1 or is_banned is True:
             raise HTTPException(status_code=400, detail="User is already banned")
         
         # Ban user
@@ -202,10 +210,12 @@ async def ban_user(
 @router.post("/{user_uuid}/unban")
 async def unban_user(
     user_uuid: str,
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
-    Unban user (admin only)
+    Unban user (admin and manager with restrictions)
+    - Only admin can unban manager or other admin users
+    - Manager can only unban regular users
     """
     try:
         db = get_metadata_db()
@@ -215,8 +225,13 @@ async def unban_user(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
+        # Permission check: Only admin can unban managers or other admins
+        if user['role'] in ['admin', 'manager'] and current_user['role'] != 'admin':
+            raise HTTPException(status_code=403, detail="Only admin can unban manager or admin users")
+        
         # Check if user is actually banned
-        if user.get('is_banned', 0) == 0:
+        is_banned = user.get('is_banned', 0)
+        if is_banned == 0 or is_banned is False or is_banned is None:
             raise HTTPException(status_code=400, detail="User is not banned")
         
         # Unban user
@@ -238,9 +253,9 @@ async def unban_user(
         raise HTTPException(status_code=500, detail=f"Failed to unban user: {str(e)}")
 
 @router.get("/stats/summary")
-async def get_user_stats(current_user: dict = Depends(get_admin_user)):
+async def get_user_stats(current_user: dict = Depends(get_admin_or_manager_user)):
     """
-    Get user statistics (admin only)
+    Get user statistics (admin and manager)
     """
     try:
         db = get_metadata_db()
@@ -252,8 +267,12 @@ async def get_user_stats(current_user: dict = Depends(get_admin_user)):
         result = db.conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
         admin_count = result.fetchone()[0]
         
+        # Get manager count
+        result = db.conn.execute("SELECT COUNT(*) FROM users WHERE role = 'manager'")
+        manager_count = result.fetchone()[0]
+        
         # Get regular user count
-        user_count = total_users - admin_count
+        user_count = total_users - admin_count - manager_count
         
         # Get recent users (last 7 days)
         from datetime import datetime, timedelta
@@ -264,6 +283,7 @@ async def get_user_stats(current_user: dict = Depends(get_admin_user)):
         return {
             "total": total_users,
             "admin": admin_count,
+            "manager": manager_count,
             "user": user_count,
             "recent": recent_users
         }
@@ -272,9 +292,9 @@ async def get_user_stats(current_user: dict = Depends(get_admin_user)):
         raise HTTPException(status_code=500, detail=f"Failed to get user stats: {str(e)}")
 
 @router.get("/stats")
-async def get_user_statistics(current_user: dict = Depends(get_admin_user)):
+async def get_user_statistics(current_user: dict = Depends(get_admin_or_manager_user)):
     """
-    Get detailed user statistics (admin only) - Similar format to files stats
+    Get detailed user statistics (admin and manager) - Similar format to files stats
     """
     try:
         db = get_metadata_db()
@@ -300,6 +320,7 @@ async def get_user_statistics(current_user: dict = Depends(get_admin_user)):
         return {
             "total": total_users,
             "admin": role_counts.get("admin", 0),
+            "manager": role_counts.get("manager", 0),
             "user": role_counts.get("user", 0),
             "recent_month": recent_month,
             "today_new": today_new,

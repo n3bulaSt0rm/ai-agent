@@ -88,6 +88,15 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)):
         )
     return current_user
 
+async def get_admin_or_manager_user(current_user: dict = Depends(get_current_user)):
+    """Check if user is an admin or manager"""
+    if current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin or manager access required"
+        )
+    return current_user
+
 async def verify_google_token(access_token: str) -> Optional[dict]:
     """Verify Google access token and get user info"""
     try:

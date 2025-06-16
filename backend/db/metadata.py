@@ -261,14 +261,14 @@ class MetadataDB:
         
         Args:
             user_uuid: UUID of the user
-            new_role: New role ('admin' or 'user')
+            new_role: New role ('admin', 'manager', or 'user')
             updated_by: Username of who made the update
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            if new_role not in ['admin', 'user']:
+            if new_role not in ['admin', 'manager', 'user']:
                 return False
                 
             now = datetime.now().isoformat()
@@ -368,7 +368,7 @@ class MetadataDB:
         """
         try:
             result = self.conn.execute(
-                "SELECT uuid, username, role, created_at, updated_at, updated_by FROM users WHERE uuid = ?", 
+                "SELECT uuid, username, role, created_at, updated_at, updated_by, is_banned FROM users WHERE uuid = ?", 
                 (user_uuid,)
             )
             user = result.fetchone()

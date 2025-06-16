@@ -10,8 +10,8 @@ import {
   UsersIcon, 
   UserGroupIcon, 
   UserIcon,
+  UserPlusIcon,
   MagnifyingGlassIcon,
-  ShieldCheckIcon,
   UserMinusIcon,
   NoSymbolIcon,
   CheckCircleIcon,
@@ -116,8 +116,14 @@ const UserManagement = () => {
   const handleRoleUpdate = async (userId, newRole, username) => {
     const currentUser = JSON.parse(localStorage.getItem('user'));
     
-    if (currentUser.uuid === userId && newRole !== 'admin') {
-      toast.error('You cannot remove admin role from yourself');
+    // Prevent granting admin role through frontend
+    if (newRole === 'admin') {
+      toast.error('Cannot grant admin role through this interface');
+      return;
+    }
+    
+    if (currentUser.uuid === userId && (newRole !== 'admin' && newRole !== 'manager')) {
+      toast.error('You cannot remove admin/manager role from yourself');
       return;
     }
 
@@ -349,7 +355,10 @@ const UserManagement = () => {
                     </td>
                     <td className="text-center">
                       <div className="flex justify-center">
-                        <span className={`status-badge ${user.role === 'admin' ? 'admin' : 'user'}`}>
+                        <span className={`status-badge ${
+                          user.role === 'admin' ? 'admin' : 
+                          user.role === 'manager' ? 'manager' : 'user'
+                        }`}>
                           {user.role}
                         </span>
                         {(user.is_banned === 1 || user.is_banned === true) && (
@@ -368,34 +377,37 @@ const UserManagement = () => {
                           const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
                           const isCurrentUser = user.username === currentUser.username;
                           const isDefaultAdmin = user.username === 'admin'; // Default admin
-                          const currentUserIsDefaultAdmin = currentUser.username === 'admin';
+                          const currentUserIsAdmin = currentUser.role === 'admin';
+                          const currentUserIsAdminOrManager = currentUser.role === 'admin' || currentUser.role === 'manager';
                           const isBanned = user.is_banned === 1 || user.is_banned === true;
                           
                           return (
                             <>
-                              {/* Grant Admin Button */}
-                              {user.role !== 'admin' && !isCurrentUser && !isBanned && (
+                              {/* Grant Manager Button - Only admin can do this */}
+                              {user.role === 'user' && !isCurrentUser && !isBanned && currentUserIsAdmin && (
                                 <button
-                                  className="action-icon process-btn"
-                                  onClick={() => handleRoleUpdate(user.uuid, 'admin', user.username)}
+                                  className="action-icon edit-btn"
+                                  onClick={() => handleRoleUpdate(user.uuid, 'manager', user.username)}
                                   disabled={actionLoading[`role_${user.uuid}`]}
-                                  title="Grant Admin"
+                                  title="Grant Manager"
                                 >
                                   {actionLoading[`role_${user.uuid}`] ? (
                                     <div className="loading-spinner small" />
                                   ) : (
-                                    <ShieldCheckIcon className="w-4 h-4" />
+                                    <UserPlusIcon className="w-4 h-4" />
                                   )}
                                 </button>
                               )}
                               
-                              {/* Revoke Admin Button */}
-                              {user.role === 'admin' && !isCurrentUser && !isDefaultAdmin && !isBanned && (
+
+                              
+                              {/* Revoke to User Button - Only admin can do this */}
+                              {(user.role === 'admin' || user.role === 'manager') && !isCurrentUser && !isDefaultAdmin && !isBanned && currentUserIsAdmin && (
                                 <button
                                   className="action-icon view-btn"
                                   onClick={() => handleRoleUpdate(user.uuid, 'user', user.username)}
                                   disabled={actionLoading[`role_${user.uuid}`]}
-                                  title="Revoke Admin"
+                                  title={`Revoke ${user.role === 'admin' ? 'Admin' : 'Manager'} Role`}
                                 >
                                   {actionLoading[`role_${user.uuid}`] ? (
                                     <div className="loading-spinner small" />
@@ -405,27 +417,32 @@ const UserManagement = () => {
                                 </button>
                               )}
                               
-                              {/* Unban Button */}
+                              {/* Unban Button - Admin and Manager can unban, but only admin can unban manager/admin */}
                               {isBanned && !isCurrentUser && (
-                                <button
-                                  className="action-icon process-btn"
-                                  onClick={() => handleBanUser(user, 'unban')}
-                                  disabled={actionLoading[`ban_${user.uuid}`]}
-                                  title="Unban User"
-                                >
-                                  {actionLoading[`ban_${user.uuid}`] ? (
-                                    <div className="loading-spinner small" />
-                                  ) : (
-                                    <CheckCircleIcon className="w-4 h-4" />
-                                  )}
-                                </button>
+                                <>
+                                  {(user.role === 'user' && currentUserIsAdminOrManager) || 
+                                   ((user.role === 'admin' || user.role === 'manager') && currentUserIsAdmin) ? (
+                                    <button
+                                      className="action-icon process-btn"
+                                      onClick={() => handleBanUser(user, 'unban')}
+                                      disabled={actionLoading[`ban_${user.uuid}`]}
+                                      title="Unban User"
+                                    >
+                                      {actionLoading[`ban_${user.uuid}`] ? (
+                                        <div className="loading-spinner small" />
+                                      ) : (
+                                        <CheckCircleIcon className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  ) : null}
+                                </>
                               )}
                               
-                              {/* Ban Button */}
+                              {/* Ban Button - Admin and Manager can ban, but only admin can ban manager/admin */}
                               {!isBanned && !isCurrentUser && !isDefaultAdmin && (
                                 <>
-                                  {/* Only default admin can ban other admins */}
-                                  {(user.role !== 'admin' || currentUserIsDefaultAdmin) && (
+                                  {(user.role === 'user' && currentUserIsAdminOrManager) || 
+                                   ((user.role === 'admin' || user.role === 'manager') && currentUserIsAdmin) ? (
                                     <button
                                       className="action-icon delete-btn"
                                       onClick={() => handleBanUser(user, 'ban')}
@@ -438,7 +455,7 @@ const UserManagement = () => {
                                         <NoSymbolIcon className="w-4 h-4" />
                                       )}
                                     </button>
-                                  )}
+                                  ) : null}
                                 </>
                               )}
                             </>

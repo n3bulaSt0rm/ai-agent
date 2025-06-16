@@ -59,13 +59,13 @@ const AuthCallback = () => {
         setUser(userInfo);
       }
       
-      console.log('AuthCallback - Navigating to:', role === 'admin' ? '/dashboard' : '/search');
+      console.log('AuthCallback - Navigating to:', (role === 'admin' || role === 'manager') ? '/dashboard' : '/search');
       
       setProcessed(true);
       
       // Navigate based on role with a small delay to ensure state is updated
       setTimeout(() => {
-        if (role === 'admin') {
+        if (role === 'admin' || role === 'manager') {
           navigate('/dashboard', { replace: true });
         } else {
           navigate('/search', { replace: true });
@@ -79,7 +79,7 @@ const AuthCallback = () => {
       // User is already logged in, navigate based on role
       console.log('AuthCallback - User already logged in:', user);
       setProcessed(true);
-      if (user.role === 'admin') {
+      if (user.role === 'admin' || user.role === 'manager') {
         navigate('/dashboard', { replace: true });
       } else {
         navigate('/search', { replace: true });

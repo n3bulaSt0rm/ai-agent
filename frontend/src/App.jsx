@@ -35,22 +35,22 @@ const RoleBasedRedirect = () => {
     return <Navigate to="/login" replace />;
   }
   
-  if (user.role === 'admin') {
+  if (user.role === 'admin' || user.role === 'manager') {
     return <Navigate to="/dashboard" replace />;
   } else {
     return <Navigate to="/search" replace />;
   }
 };
 
-// Admin-only route wrapper
-const AdminRoute = ({ children }) => {
+// Admin or Manager route wrapper
+const AdminOrManagerRoute = ({ children }) => {
   const { user } = useAuth();
   
   if (!user) {
     return <Navigate to="/login" replace />;
   }
   
-  if (user.role !== 'admin') {
+  if (user.role !== 'admin' && user.role !== 'manager') {
     return <Navigate to="/search" replace />;
   }
   
@@ -98,24 +98,24 @@ function App() {
               <Route path="/auth/callback" element={<AuthCallback />} />
               <Route path="/dashboard" element={
                 <ProtectedRoute>
-                  <AdminRoute>
+                  <AdminOrManagerRoute>
                     <Dashboard />
-                  </AdminRoute>
+                  </AdminOrManagerRoute>
                 </ProtectedRoute>
               } />
               <Route path="/documents" element={
                 <ProtectedRoute>
-                  <AdminRoute>
+                  <AdminOrManagerRoute>
                     <FilesList />
-                  </AdminRoute>
+                  </AdminOrManagerRoute>
                 </ProtectedRoute>
               } />
               <Route path="/files" element={<Navigate to="/documents" replace />} />
               <Route path="/files/:id" element={
                 <ProtectedRoute>
-                  <AdminRoute>
+                  <AdminOrManagerRoute>
                     <FileDetail />
-                  </AdminRoute>
+                  </AdminOrManagerRoute>
                 </ProtectedRoute>
               } />
               <Route path="/search" element={
@@ -125,9 +125,9 @@ function App() {
               } />
               <Route path="/users" element={
                 <ProtectedRoute>
-                  <AdminRoute>
+                  <AdminOrManagerRoute>
                     <UserManagement />
-                  </AdminRoute>
+                  </AdminOrManagerRoute>
                 </ProtectedRoute>
               } />
               <Route path="/" element={<RoleBasedRedirect />} />

@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 import '../styles/Navbar.css';
 
 const Navbar = () => {
-  const { isAuthenticated, logout, isAdmin, userRole } = useAuth();
+  const { isAuthenticated, logout, isAdmin, isAdminOrManager, userRole } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [isScrolled, setIsScrolled] = useState(false);
@@ -52,7 +52,7 @@ const Navbar = () => {
     <nav className={`navbar ${isClient && isScrolled ? 'scrolled' : ''}`}>
       <div className="navbar-container">
         <div className="navbar-logo">
-          <Link to={isAdmin ? "/dashboard" : "/search"}>
+          <Link to={isAdminOrManager ? "/dashboard" : "/search"}>
             <div className="logo-text">
               <span className="primary">AI</span>
               <span className="primary">Agent</span>
@@ -61,8 +61,8 @@ const Navbar = () => {
         </div>
         
         <div className={`navbar-actions ${isMobileMenuOpen ? 'active' : ''}`}>
-          {/* Show Dashboard only for admin */}
-          {isAdmin && (
+          {/* Show Dashboard for admin and manager */}
+          {isAdminOrManager && (
             <Link 
               to="/dashboard" 
               className={`nav-link logout-button styled-button ${location.pathname === '/dashboard' ? 'active' : ''}`}
@@ -72,8 +72,8 @@ const Navbar = () => {
             </Link>
           )}
           
-          {/* Show Users Management only for admin */}
-          {isAdmin && (
+          {/* Show Users Management for admin and manager */}
+          {isAdminOrManager && (
             <Link 
               to="/users" 
               className={`nav-link logout-button styled-button ${location.pathname === '/users' ? 'active' : ''}`}
@@ -92,8 +92,8 @@ const Navbar = () => {
             AI Search
           </Link>
           
-          {/* Documents - Only for admin */}
-          {isAdmin && (
+          {/* Documents - For admin and manager */}
+          {isAdminOrManager && (
             <Link 
               to="/files" 
               className={`nav-link logout-button styled-button ${location.pathname === '/files' ? 'active' : ''}`}

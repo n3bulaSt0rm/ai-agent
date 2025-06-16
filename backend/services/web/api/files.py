@@ -15,7 +15,7 @@ from backend.core.config import settings
 from backend.db.metadata import get_metadata_db
 from backend.services.messaging import publish_message
 from backend.utils.s3 import upload_to_s3, upload_to_s3_public, get_signed_url
-from backend.services.web.api.auth import get_admin_user
+from backend.services.web.api.auth import get_admin_user, get_admin_or_manager_user
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -34,7 +34,7 @@ async def upload_file(
     description: Optional[str] = Form(None),
     file_created_at: Optional[str] = Form(None),
     keywords: Optional[str] = Form(None),
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
     Upload a file to S3 and store metadata
@@ -149,7 +149,7 @@ async def list_files(
     sort_by: Optional[str] = Query(None, description="Field to sort by (size, uploadAt, updatedAt, fileCreatedAt)"),
     sort_order: Optional[str] = Query("desc", description="Sort order (asc, desc, newest, oldest, largest, smallest)"),
     date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     try:
         
@@ -387,7 +387,7 @@ async def list_files(
         )
 
 @router.get("/stats")
-async def get_file_stats(current_user: dict = Depends(get_admin_user)):
+async def get_file_stats(current_user: dict = Depends(get_admin_or_manager_user)):
     """
     Get file statistics for dashboard including storage usage
     """
@@ -436,7 +436,7 @@ async def get_file_stats(current_user: dict = Depends(get_admin_user)):
         raise HTTPException(status_code=500, detail=f"Failed to get file statistics: {str(e)}")
 
 @router.get("/{file_id}")
-async def get_file(file_id: int, current_user: dict = Depends(get_admin_user)):
+async def get_file(file_id: int, current_user: dict = Depends(get_admin_or_manager_user)):
     """
     Get details of a specific file
     """
@@ -485,7 +485,7 @@ async def get_file(file_id: int, current_user: dict = Depends(get_admin_user)):
         raise HTTPException(status_code=500, detail=f"Failed to get file: {str(e)}")
 
 @router.post("/{file_id}/process")
-async def process_file(file_id: int, process_request: Optional[ProcessFileRequest] = None, current_user: dict = Depends(get_admin_user)):
+async def process_file(file_id: int, process_request: Optional[ProcessFileRequest] = None, current_user: dict = Depends(get_admin_or_manager_user)):
     """
     Send a file for processing with optional page ranges
     """
@@ -632,7 +632,7 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 @router.delete("/{file_id}")
-async def delete_file(file_id: int, current_user: dict = Depends(get_admin_user)):
+async def delete_file(file_id: int, current_user: dict = Depends(get_admin_or_manager_user)):
     """
     Soft delete a file and its metadata
     """
@@ -676,7 +676,7 @@ async def delete_file(file_id: int, current_user: dict = Depends(get_admin_user)
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
 
 @router.post("/{file_id}/restore")
-async def restore_file(file_id: int, current_user: dict = Depends(get_admin_user)):
+async def restore_file(file_id: int, current_user: dict = Depends(get_admin_or_manager_user)):
     """
     Restore a previously deleted file
     """
@@ -726,7 +726,7 @@ async def restore_file(file_id: int, current_user: dict = Depends(get_admin_user
 async def update_file(
     file_id: int,
     file_update: FileUpdateRequest,
-    current_user: dict = Depends(get_admin_user)
+    current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
     Update file metadata

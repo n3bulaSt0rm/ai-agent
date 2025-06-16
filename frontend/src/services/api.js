@@ -480,6 +480,7 @@ const usersApi = {
       return {
         total: 0,
         admin: 0,
+        manager: 0,
         user: 0,
         recent_month: 0,
         today_new: 0
