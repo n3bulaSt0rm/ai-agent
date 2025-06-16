@@ -1317,7 +1317,7 @@ const FilesList = () => {
               <FileUploader 
                 onFileSelected={handleFileSelected}
                 acceptedFormats={['.pdf', '.txt']}
-                maxSize={10}
+                maxSize={20}
               />
             </div>
             <div className="modal-footer">

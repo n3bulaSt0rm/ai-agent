@@ -7,7 +7,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
-    allowedHosts: ['8394-113-178-42-234.ngrok-free.app']
+    host: true,
+    allowedHosts: 'all'
   },
   build: {
     rollupOptions: {

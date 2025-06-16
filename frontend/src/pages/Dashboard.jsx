@@ -387,8 +387,8 @@ const Dashboard = () => {
             <div className="modal-body">
               <FileUploader 
                 onFileSelected={handleFileSelected}
-                acceptedFormats={['.pdf', '.docx', '.doc']}
-                maxSize={10}
+                acceptedFormats={['.pdf', '.txt']}
+                maxSize={20}
               />
             </div>
             <div className="modal-footer">

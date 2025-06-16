@@ -310,18 +310,19 @@ const filesApi = {
   // Get processing service health status
   getProcessingServiceHealth: async () => {
     try {
-      // Call directly to the processing service
-      const processingServiceUrl = "http://localhost:8081/health";
-      console.log("Checking processing service health at:", processingServiceUrl);
+      // Use the backend /search/health endpoint instead of calling processing service directly
+      console.log("Checking processing service health through backend API");
       
-      const response = await axios.get(processingServiceUrl, { timeout: 5000 });
+      const response = await apiClient.get('/search/health', { timeout: 5000 });
       console.log("Health check response:", response.data);
       
       // Process the JSON response from the health endpoint
       if (response.status === 200 && response.data) {
         return {
-          status: response.data.status || "online",
-          message: response.data.message || "Service is running normally",
+          status: response.data.status === "healthy" ? "online" : 
+                 response.data.status === "degraded" ? "degraded" : "offline",
+          message: response.data.processing_service === "available" ? 
+                 "Service is running normally" : response.data.details || "Service is experiencing issues",
           timestamp: response.data.timestamp || new Date().toISOString()
         };
       } else {
@@ -336,7 +337,7 @@ const filesApi = {
       console.error('Error details:', error.response?.data || 'No response data');
       return {
         status: "offline",
-        message: error.message || "Failed to connect to processing service",
+        message: error.message || "Failed to connect to backend service",
         timestamp: new Date().toISOString()
       };
     }

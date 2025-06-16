@@ -60,20 +60,23 @@
 
 /* Add the document-type-large class to match the modal style */
 .document-type-large {
-  width: 72px;
-  height: 72px;
-  margin-right: 1.5rem;
-  background-color: #EFF6FF;
-  border-radius: 6px;
+  width: 80px;
+  height: 80px;
+  min-width: 80px;
+  border-radius: 8px;
+  margin-right: 24px;
+  background-size: contain;
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 40px;
-  flex-shrink: 0;
+  background-color: #f8fafc;
 }
 
 .document-type-large.pdf {
-  background-color: #FEF2F2;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 384 512'%3E%3Cpath fill='%23EF4444' d='M320 464C328.8 464 336 456.8 336 448V416H384V448C384 483.3 355.3 512 320 512H64C28.65 512 0 483.3 0 448V416H48V448C48 456.8 55.16 464 64 464H320zM256 160C238.3 160 224 145.7 224 128V48H64C55.16 48 48 55.16 48 64V192H0V64C0 28.65 28.65 0 64 0H229.5C246.5 0 262.7 6.743 274.7 18.75L365.3 109.3C377.3 121.3 384 137.5 384 154.5V192H336V160H256zM88 224C118.9 224 144 249.1 144 280C144 310.9 118.9 336 88 336H80V368H32V224H88zM112 280C112 267.3 101.3 256 88 256H80V304H88C101.3 304 112 292.7 112 280zM160 224H208C229 224 240 238.3 240 256C240 268.9 231.3 280.2 220 283.4C230.7 286.7 240 295.3 240 312C240 330.7 229 352 208 352H160V224zM192 352V320H208C214.1 320 224 316.1 224 312C224 307.9 214.1 304 208 304H192V272H208C214.1 272 224 268.1 224 256C224 251.9 214.1 248 208 248H192V352zM304 224H352V272H328V288H352V320H328V368H304V224z'/%3E%3C/svg%3E");
+  background-image: url('/icon/pdf-svg.svg');
+}
+
+.document-type-large.txt {
+  background-image: url('/icon/txt-svg.svg');
 }
 
 .document-hero-content h1 {

@@ -45,7 +45,13 @@ async def upload_file(
     if detected_type is not None:
         content_type = detected_type.mime
     else:
-        print(f"Error: Could not detect file type: {file.filename}")
+        # Nếu không phát hiện được type bằng magic bytes, kiểm tra phần mở rộng file
+        filename_lower = file.filename.lower()
+        if filename_lower.endswith('.txt'):
+            content_type = 'text/plain'
+            print(f"File type detected from extension: {file.filename} -> {content_type}")
+        else:
+            print(f"Error: Could not detect file type: {file.filename}")
 
     
     allowed_mime_types = []
@@ -127,7 +133,7 @@ async def upload_file(
             "description": description,
             "keywords": keyword_list,
             "pages": file_pages,
-            "type": content_type,
+            "type": "txt" if content_type == "text/plain" else "pdf",
             "uploadedBy": current_user['username']
         }
     except Exception as e:
@@ -335,7 +341,7 @@ async def list_files(
                 "status": file_data["status"],
                 "description": file_data.get("description", ""),
                 "pages": file_data.get("pages", 0),
-                "type": "pdf",
+                "type": "txt" if file_data.get("content_type") == "text/plain" else "pdf",
                 "uuid": file_data.get("uuid", ""),
                 "uploadedBy": file_data.get("uploaded_by", "admin"),
                 "keywords": keywords,
@@ -459,7 +465,7 @@ async def get_file(file_id: int, current_user: dict = Depends(get_admin_user)):
             "uploadAt": file["upload_at"],
             "status": file["status"],
             "pages": file["pages"] or 0,
-            "type": "pdf",
+            "type": "txt" if file.get("content_type") == "text/plain" else "pdf",
             "uploadedBy": file.get("uploaded_by", "admin"),
             "description": file.get("description", ""),
             "fileCreatedAt": file.get("file_created_at", file["upload_at"]),
