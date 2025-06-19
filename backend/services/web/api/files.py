@@ -24,6 +24,7 @@ class FileUpdateRequest(BaseModel):
     status: Optional[str] = None
     keywords: Optional[Union[str, List[str]]] = None
     file_created_at: Optional[str] = None
+    source: Optional[str] = None
 
 class ProcessFileRequest(BaseModel):
     page_ranges: Optional[List[str]] = None 
@@ -34,6 +35,7 @@ async def upload_file(
     description: Optional[str] = Form(None),
     file_created_at: Optional[str] = Form(None),
     keywords: Optional[str] = Form(None),
+    source: Optional[str] = Form(None),
     current_user: dict = Depends(get_admin_or_manager_user)
 ):
     """
@@ -93,7 +95,7 @@ async def upload_file(
         # Upload to S3 with public-read ACL
         s3_path = f"files/{unique_id}_{safe_filename}"
         
-        public_url = await upload_to_s3_public(content, s3_path)
+        public_url = await upload_to_s3_public(content, s3_path, content_type)
         
         keywords_str = keywords or ""        
         if keywords_str:
@@ -115,7 +117,8 @@ async def upload_file(
             keywords=keywords_str,
             uuid=unique_id,
             pages=file_pages,
-            uploaded_by=current_user['username']
+            uploaded_by=current_user['username'],
+            source=source
         )
         
         # Format response to match frontend expectations
@@ -134,7 +137,8 @@ async def upload_file(
             "keywords": keyword_list,
             "pages": file_pages,
             "type": "txt" if content_type == "text/plain" else "pdf",
-            "uploadedBy": current_user['username']
+            "uploadedBy": current_user['username'],
+            "source": source if content_type == "text/plain" else None
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
@@ -348,7 +352,8 @@ async def list_files(
                 "pages_processed_range": file_data.get("pages_processed_range", ""),
                 "link": file_data["object_url"],
                 "filename": file_data["filename"],
-                "view_url": file_data["object_url"]
+                "view_url": file_data["object_url"],
+                "source": file_data.get("source") if file_data.get("content_type") == "text/plain" else None
             }
             
             # Special handling for deleted files
@@ -474,7 +479,8 @@ async def get_file(file_id: int, current_user: dict = Depends(get_admin_or_manag
             "filename": file["filename"],
             "view_url": file["object_url"],
             "keywords": keywords,
-            "pages_processed_range": file.get("pages_processed_range")
+            "pages_processed_range": file.get("pages_processed_range"),
+            "source": file.get("source") if file.get("content_type") == "text/plain" else None
         }
         
         
@@ -607,7 +613,8 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
                 "content_type": file.get("content_type", "application/pdf"),  
                 "action": "process",
                 "page_range": page_range,  
-                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
+                "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update",
+                "source": file.get("source") if file.get("content_type") == "text/plain" else None
             }
             
             await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)

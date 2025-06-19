@@ -624,6 +624,20 @@ const FileDetail = () => {
                   <div className="detail-value">{document.uploadedBy || 'admin'}</div>
                 </div>
                 
+                {/* Show source field only for txt files */}
+                {document.type === 'txt' && document.source && (
+                  <div className="detail-row">
+                    <div className="detail-label">Source</div>
+                    <div className="detail-value" style={{ 
+                      wordBreak: 'break-all',
+                      fontSize: '14px',
+                      color: '#1e293b'
+                    }}>
+                      {document.source}
+                    </div>
+                  </div>
+                )}
+                
                 {/* Keywords section - hidden but logic maintained */}
                 <div className="detail-row" style={{ display: 'none' }}>
                   <div className="detail-label">Keywords</div>

@@ -51,13 +51,14 @@ const FileUploader = ({
   const [keywords, setKeywords] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [description, setDescription] = useState('');
+  const [source, setSource] = useState('');
 
   // Use effect to update parent component when metadata changes
   useEffect(() => {
     if (selectedFile) {
       updateFileMetadata(false);
     }
-  }, [keywords, fileCreatedAt, description]);
+  }, [keywords, fileCreatedAt, description, source]);
 
   // Add a function to highlight the date field with an error
   const highlightDateField = () => {
@@ -93,6 +94,7 @@ const FileUploader = ({
     fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
     fileWithMetadata.description = description || '';
     fileWithMetadata.keywords = keywords || '';
+    fileWithMetadata.source = source || '';
     
     console.log('Updating file with keywords:', keywords);
     console.log('Updating file with date:', fileCreatedAt);
@@ -131,6 +133,11 @@ const FileUploader = ({
   // Handle description change
   const handleDescriptionChange = (e) => {
     setDescription(e.target.value);
+  };
+
+  // Handle source change
+  const handleSourceChange = (e) => {
+    setSource(e.target.value);
   };
 
   // Handle date change
@@ -196,6 +203,7 @@ const FileUploader = ({
     fileWithMetadata.fileCreatedAt = fileCreatedAt || '';
     fileWithMetadata.description = description || '';
     fileWithMetadata.keywords = keywords || '';
+    fileWithMetadata.source = source || '';
     
     console.log('Setting file with keywords:', keywords);
     console.log('Setting file with date:', fileCreatedAt);
@@ -295,6 +303,28 @@ const FileUploader = ({
                   rows={3}
                 />
               </div>
+              
+              {/* Source field - only show for txt files */}
+              {selectedFile && selectedFile.name.toLowerCase().endsWith('.txt') && (
+                <div className="form-group">
+                  <label htmlFor="source">Source:</label>
+                  <input 
+                    type="text" 
+                    id="source" 
+                    value={source}
+                    onChange={handleSourceChange}
+                    placeholder="Enter source information..."
+                    className="form-control"
+                    style={{ 
+                      color: "#000000",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "4px",
+                      padding: "8px",
+                      width: "100%"
+                    }}
+                  />
+                </div>
+              )}
               
               {/* Keywords input hidden but kept in the DOM */}
               <div className="form-group" style={{ display: 'none' }}>

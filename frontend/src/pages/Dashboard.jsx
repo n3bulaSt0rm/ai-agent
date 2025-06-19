@@ -151,7 +151,8 @@ const Dashboard = () => {
         selectedFile,
         selectedFile.description || '',
         selectedFile.fileCreatedAt,
-        selectedFile.keywords
+        selectedFile.keywords,
+        selectedFile.source
       );
       
       toast.success(`"${selectedFile.name}" uploaded successfully.`);

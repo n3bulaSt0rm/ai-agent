@@ -36,13 +36,14 @@ s3_client = boto3.client(
 # Thread pool for async operations
 _executor = ThreadPoolExecutor(max_workers=10)
 
-async def upload_to_s3(content: bytes, path: str) -> str:
+async def upload_to_s3(content: bytes, path: str, content_type: str = 'application/pdf') -> str:
     """
     Upload content to S3 bucket using presigned URL approach.
     
     Args:
         content: File content as bytes
         path: Path within bucket
+        content_type: MIME type of the content
         
     Returns:
         S3 URL for the uploaded file
@@ -50,13 +51,13 @@ async def upload_to_s3(content: bytes, path: str) -> str:
     bucket_name = settings.S3_BUCKET_NAME
     
     try:
-        logger.info(f"Uploading to S3 using presigned URL approach: {path}")
+        logger.info(f"Uploading to S3 using presigned URL approach: {path} with content-type: {content_type}")
         
         # Get a pre-signed URL for PUT request
         def _get_presigned_url():
             presigned_url = s3_client.generate_presigned_url(
                 'put_object',
-                Params={'Bucket': bucket_name, 'Key': path, 'ContentType': 'application/pdf'},
+                Params={'Bucket': bucket_name, 'Key': path, 'ContentType': content_type},
                 ExpiresIn=3600
             )
             return presigned_url
@@ -68,7 +69,7 @@ async def upload_to_s3(content: bytes, path: str) -> str:
             response = requests.put(
                 presigned_url,
                 data=content,
-                headers={'Content-Type': 'application/pdf'}
+                headers={'Content-Type': content_type}
             )
             
             if response.status_code not in (200, 204):
@@ -92,7 +93,7 @@ async def upload_to_s3(content: bytes, path: str) -> str:
                     Bucket=bucket_name,
                     Key=path,
                     Body=content,
-                    ContentType='application/pdf'
+                    ContentType=content_type
                 )
                 logger.info(f"Last resort upload response: {response}")
                 return f"s3://{bucket_name}/{path}"
@@ -104,13 +105,14 @@ async def upload_to_s3(content: bytes, path: str) -> str:
             logger.error(f"All upload methods failed. Final error: {str(final_e)}")
             raise Exception(f"Could not upload file using any method: {str(e)} -> {str(final_e)}")
 
-async def upload_to_s3_public(content: bytes, path: str) -> str:
+async def upload_to_s3_public(content: bytes, path: str, content_type: str = 'application/pdf') -> str:
     """
     Upload content to S3 bucket and return a direct public URL.
     
     Args:
         content: File content as bytes
         path: Path within bucket
+        content_type: MIME type of the content
         
     Returns:
         Public URL for the uploaded file
@@ -118,7 +120,7 @@ async def upload_to_s3_public(content: bytes, path: str) -> str:
     bucket_name = settings.S3_BUCKET_NAME
     
     try:
-        logger.info(f"Uploading to S3 with public URL: {path}")
+        logger.info(f"Uploading to S3 with public URL: {path} with content-type: {content_type}")
         
         def _upload_public():
             # Upload without ACL
@@ -126,7 +128,7 @@ async def upload_to_s3_public(content: bytes, path: str) -> str:
                 Bucket=bucket_name,
                 Key=path,
                 Body=content,
-                ContentType='application/pdf'
+                ContentType=content_type
             )
             logger.info(f"Public upload response: {response}")
             

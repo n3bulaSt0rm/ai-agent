@@ -80,79 +80,87 @@ class GeminiTextProcessor:
                 time.sleep(2)
                 uploaded_file = genai.get_file(uploaded_file.name)
             
-            # Step 4: Generate chunks using Gemini
+            # Step 4: Generate chunks with Gemini
             prompt = """
-Bạn là một chuyên gia phân tích và tổ chức văn bản thông minh. Nhiệm vụ của bạn là chia văn bản thành các đoạn (chunks) tối ưu cho việc tìm kiếm và truy xuất thông tin.
+<instructions>
+**VAI TRÒ VÀ MỤC TIÊU:**
+Bạn là một AI chuyên gia về xử lý ngôn ngữ, có nhiệm vụ tiền xử lý tài liệu cho hệ thống Retrieval-Augmented Generation (RAG). Mục tiêu của bạn là chia văn bản thành các khối (chunk) độc lập, giàu ngữ nghĩa và được tối ưu cho hệ thống tìm kiếm lai (hybrid search).
 
-## NGUYÊN TẮC CHUNKING:
+**HỆ THỐNG QUY TẮC ƯU TIÊN (HIERARCHY OF RULES):**
+Bạn PHẢI tuân thủ các quy tắc theo thứ tự ưu tiên từ cao đến thấp sau đây:
 
-### 1. Phân tích cấu trúc văn bản:
-- Nhận diện tiêu đề, phần, đoạn văn chính
-- Xác định ranh giới logic giữa các ý tưởng
-- Giữ nguyên cấu trúc markdown nếu có
+1.  **ƯU TIÊN #1 (BẮT BUỘC TUYỆT ĐỐI): RÀNG BUỘC KỸ THUẬT**
+    *   Mỗi chunk **TUYỆT ĐỐI KHÔNG** được dài quá **1200 từ** để đảm bảo tương thích với model embedding (giới hạn 2048 tokens).
 
-### 2. Kích thước chunk thông minh:
-- Mỗi chunk: 200-600 từ (tùy thuộc nội dung)
-- Chunk ngắn hơn cho thông tin quan trọng, độc lập
-- Chunk dài hơn cho văn bản mô tả, giải thích liên tục
+2.  **ƯU TIÊN #2 (CỰC KỲ QUAN TRỌNG): TÍNH TOÀN VẸN NGỮ NGHĨA VÀ CẤU TRÚC**
+    *   **Gói Gọn Ý Nghĩa:** Mỗi chunk phải là một đơn vị thông tin hoàn chỉnh, trả lời trọn vẹn một câu hỏi hoặc mô tả đầy đủ một quy trình.
+    *   **Tôn Trọng Cấu Trúc:** KHÔNG BAO GIỜ ngắt giữa chừng một danh sách, một bảng biểu, hoặc một bộ hướng dẫn logic.
+    *   **QUY TẮC VÀNG:** Một quy trình hướng dẫn hoàn chỉnh cho một đối tượng cụ thể (ví dụ: "hướng dẫn cho sinh viên tốt nghiệp") PHẢI nằm trong MỘT chunk duy nhất, ngay cả khi nó dài hơn kích thước đề xuất ở Ưu tiên #3.
 
-### 3. Tính độc lập của chunk:
-- Mỗi chunk phải có nghĩa hoàn chỉnh khi đọc riêng lẻ
-- Bao gồm đủ context để hiểu nội dung
-- Tránh cắt giữa câu, định nghĩa, hoặc ví dụ
+3.  **ƯU TIÊN #3 (KHUYẾN NGHỊ TỐI ƯU): KÍCH THƯỚC THÍCH ỨNG**
+    *   Chỉ khi đã đảm bảo Ưu tiên #2, hãy cố gắng điều chỉnh kích thước chunk để tối ưu hóa hiệu suất tìm kiếm.
+    *   **Văn bản có cấu trúc cao (luật, hướng dẫn):** Hướng đến chunk nhỏ hơn, khoảng **100-250 từ**.
+    *   **Văn bản thông thường:** Hướng đến khoảng **200-400 từ**.
+    *   **Văn bản tường thuật:** Có thể dùng chunk lớn hơn, **350-550 từ**.
 
-### 4. Tối ưu cho tìm kiếm:
-- Mỗi chunk tập trung vào 1-2 chủ đề chính
-- Giữ từ khóa quan trọng trong cùng chunk
-- Chunk chứa tiêu đề nên bao gồm nội dung liên quan
+**QUY TRÌNH SUY LUẬN (CHAIN-OF-THOUGHT):**
+1.  **Bước 1: Quét Toàn Diện:** Đọc toàn bộ tài liệu để nắm bắt các chủ đề và đối tượng chính.
+2.  **Bước 2: Xác Định Các Khối Logic:** Tìm các khối văn bản phục vụ một mục đích hoặc một đối tượng duy nhất (ví dụ: khối hướng dẫn cho sinh viên tốt nghiệp, khối hướng dẫn cho sinh viên thôi học). Đây là các chunk nháp.
+3.  **Bước 3: Rà Soát và Gộp Chunk (QUAN TRỌNG):** Nhìn lại các chunk nháp. Nếu một quy trình bị chia thành nhiều chunk, hãy **GỘP CHÚNG LẠI** thành một chunk duy nhất để đảm bảo tuân thủ **ƯU TIÊN #2**.
+4.  **Bước 4: Kiểm Tra Ràng Buộc Cuối Cùng:** Đảm bảo không có chunk nào vi phạm **ƯU TIÊN #1**.
+5.  **Bước 5: Xuất Kết Quả:** Định dạng danh sách các chunk cuối cùng thành JSON.
+</instructions>
 
-### 5. Xử lý nội dung đặc biệt:
-- Danh sách: nhóm các mục liên quan
-- Bảng: giữ nguyên structure hoặc chuyển thành text mô tả
-- Code/công thức: không tách rời
-- Trích dẫn: giữ nguyên với context
+<example>
+### VÍ DỤ MẪU ###
 
-## OUTPUT FORMAT:
-Trả về JSON với cấu trúc sau:
+**Văn bản đầu vào:**
+"Điều 1. Về việc xét tốt nghiệp
+1. Sinh viên được xét tốt nghiệp khi tích lũy đủ số tín chỉ quy định trong chương trình đào tạo và không còn nợ môn. Điểm trung bình tích lũy phải đạt từ 2.0 trở lên.
+2. Ngoài ra, sinh viên phải hoàn thành các chứng chỉ Giáo dục Quốc phòng và Giáo dục Thể chất.
 
+Điều 2. Về thủ tục
+Để được công nhận tốt nghiệp, sinh viên cần nộp đơn tại Phòng Công tác sinh viên (Phòng A1) và các chứng chỉ ngoại ngữ theo yêu cầu của nhà trường trước ngày 30/06 hàng năm. Lệ phí xét tốt nghiệp là 500,000 VNĐ."
+
+**Kết quả JSON đầu ra:**
+```json
 {
-  "analysis": {
-    "total_chunks": <số>,
-    "document_type": "<loại văn bản: academic/technical/narrative/report/other>",
-    "main_topics": ["<chủ đề chính 1>", "<chủ đề chính 2>", "..."]
-  },
   "chunks": [
     {
       "chunk_id": 0,
-      "content": "<nội dung chunk>",
-      "topic": "<chủ đề chính của chunk>",
-      "keywords": ["<từ khóa 1>", "<từ khóa 2>", "..."],
-      "chunk_type": "title/content/list/table/conclusion/other"
+      "content": "Điều 1. Về việc xét tốt nghiệp\n1. Sinh viên được xét tốt nghiệp khi tích lũy đủ số tín chỉ quy định trong chương trình đào tạo và không còn nợ môn. Điểm trung bình tích lũy phải đạt từ 2.0 trở lên.\n2. Ngoài ra, sinh viên phải hoàn thành các chứng chỉ Giáo dục Quốc phòng và Giáo dục Thể chất."
+    },
+    {
+      "chunk_id": 1,
+      "content": "Điều 2. Về thủ tục\nĐể được công nhận tốt nghiệp, sinh viên cần nộp đơn tại Phòng Công tác sinh viên (Phòng A1) và các chứng chỉ ngoại ngữ theo yêu cầu của nhà trường trước ngày 30/06 hàng năm. Lệ phí xét tốt nghiệp là 500,000 VNĐ."
     }
   ]
 }
+```
+</example>
 
-## QUAN TRỌNG:
-- CHỈ TRẢ VỀ JSON VALID, KHÔNG GIẢI THÍCH
-- Giữ nguyên format gốc (markdown, bullets, numbers...)
-- Đảm bảo không mất thông tin quan trọng
-- Tối ưu cho việc semantic search
+**ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC):**
+Chỉ trả về một đối tượng JSON hợp lệ theo cấu trúc trong ví dụ. KHÔNG thêm bất kỳ văn bản, giải thích hay định dạng markdown nào khác bên ngoài đối tượng JSON.
 """
             
             logger.info("Generating chunks with Gemini")
-            model = genai.GenerativeModel("gemini-2.0-flash")
-            response = model.generate_content([uploaded_file, prompt])
+            model = genai.GenerativeModel("gemini-1.5-flash")
+
+            generation_config = {
+                "temperature": 0.2,
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+            }
+
+            response = model.generate_content(
+                [uploaded_file, prompt],
+                generation_config=generation_config
+            )
             
             # Step 5: Parse response
-            response_text = response.text.strip()
+            # With response_mime_type="application/json", the output is a clean JSON string.
+            response_text = response.text
             logger.info(f"Received response from Gemini: {response_text}...")
-            
-            # Clean response and parse JSON
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
             
             try:
                 data = json.loads(response_text)

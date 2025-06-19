@@ -69,7 +69,7 @@ const filesApi = {
   },
   
   // Upload a new file
-  uploadFile: async (file, description, fileCreatedAt = null, keywords = null) => {
+  uploadFile: async (file, description, fileCreatedAt = null, keywords = null, source = null) => {
     try {
       // Verify that file is valid before proceeding
       if (!file || !(file instanceof File)) {
@@ -92,6 +92,12 @@ const filesApi = {
       const keywordsStr = keywords ? keywords.toString() : '';
       console.log('API uploadFile - Adding keywords to form:', keywordsStr);
       formData.append('keywords', keywordsStr);
+      
+      // Add source for txt files
+      if (source) {
+        formData.append('source', source);
+        console.log('API uploadFile - Adding source to form:', source);
+      }
       
       // Log semua nilai form untuk debugging
       console.log('API uploadFile - FormData contents:');

@@ -89,6 +89,13 @@ class MetadataDB:
             if 'is_outdated' not in columns:
                 self.conn.execute('ALTER TABLE gmail_threads ADD COLUMN is_outdated INTEGER DEFAULT 0')
             
+            # Check if source column exists in files_management, add it if not
+            cursor = self.conn.execute("PRAGMA table_info(files_management)")
+            files_columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'source' not in files_columns:
+                self.conn.execute('ALTER TABLE files_management ADD COLUMN source TEXT')
+            
             # Create default admin user if not exists
             result = self.conn.execute("SELECT * FROM users WHERE username = ?", (settings.ADMIN_USERNAME,))
             if not result.fetchone():
@@ -383,7 +390,7 @@ class MetadataDB:
     def add_pdf_file(self, filename: str, file_size: int, 
                      content_type: str, object_url: str, description: str = None, 
                      file_created_at: str = None, pages: int = 0, uuid: str = None, keywords: str = None,
-                     uploaded_by: str = None) -> int:
+                     uploaded_by: str = None, source: str = None) -> int:
         """
         Add a new file to the database.
         
@@ -398,6 +405,7 @@ class MetadataDB:
             uuid: Unique identifier for the file
             keywords: JSON string containing keywords
             uploaded_by: Username of the user who uploaded the file
+            source: Source information (for txt files)
             
         Returns:
             ID of the new file record
@@ -412,10 +420,10 @@ class MetadataDB:
             result = self.conn.execute(
                 '''INSERT INTO files_management 
                    (uuid, filename, file_size, content_type, object_url,
-                    upload_at, description, file_created_at, updated_at, pages, status, keywords, uploaded_by) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                    upload_at, description, file_created_at, updated_at, pages, status, keywords, uploaded_by, source) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (uuid, filename, file_size, content_type, object_url,
-                 now, description, file_created_at or now, now, pages, 'pending', keywords, uploaded_by)
+                 now, description, file_created_at or now, now, pages, 'pending', keywords, uploaded_by, source)
             )
             file_id = result.lastrowid
             
@@ -520,15 +528,13 @@ class MetadataDB:
         params = []
         query_parts = []
         
-        # Build query dynamically based on provided parameters
         query_parts.append("status = ?")
         params.append(status)
         
         query_parts.append("updated_at = ?")
         params.append(now)
         
-        # If we're changing to deleted status, save the current status
-        if status == "deleted" and previous_status:
+        if previous_status is not None:
             query_parts.append("previous_status = ?")
             params.append(previous_status)
         

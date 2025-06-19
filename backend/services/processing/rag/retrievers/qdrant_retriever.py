@@ -361,9 +361,8 @@ class VietnameseQueryModule:
 Trả về kết quả dưới dạng JSON với format sau:
 {{
     "queries": [
-        {{
-            "query": "câu hỏi được viết một cách rõ ràng"
-        }}
+        "câu hỏi 1",
+        "câu hỏi 2"
     ],
     "summary": "tóm tắt thông tin về nội dung hội thoại email, đảm bảo đủ thông tin để trả lời các câu hỏi, súc tích, không quá 700 từ"
 }}
@@ -397,9 +396,7 @@ Email cần phân tích:
             
             parsed_response = json.loads(response_text.strip())
             
-            queries = [item.get("query", "").strip() 
-                      for item in parsed_response.get("queries", []) 
-                      if item.get("query", "").strip()]
+            queries = [q.strip() for q in parsed_response.get("queries", []) if isinstance(q, str) and q.strip()]
             
             summary = parsed_response.get("summary", "").strip()
             if not summary:
@@ -471,25 +468,54 @@ Email cần phân tích:
             return [first_line_fallback], None
         
         try:
-            prompt = f"""Hãy phân tích đoạn văn bản sau và trích xuất tất cả các câu hỏi/yêu cầu thông tin có trong đó.
+            prompt = f"""
+<instructions>
+**VAI TRÒ:**
+Bạn là một AI chuyên gia phân tích và chuyển đổi ý định người dùng thành các truy vấn tìm kiếm (search queries) hiệu quả cho một hệ thống RAG.
 
-Trả về kết quả dưới dạng JSON với format sau:
+**NHIỆM VỤ:**
+Phân tích đoạn văn bản do người dùng cung cấp. Thay vì chỉ trích xuất các câu hỏi có sẵn, hãy xác định **ý định tìm kiếm cốt lõi** và tạo ra một hoặc nhiều câu hỏi rõ ràng, mạch lạc, có thể dùng để truy vấn vào một cơ sở dữ liệu tri thức.
+
+**QUY TRÌNH SUY LUẬN:**
+1.  Đọc kỹ văn bản và xác định các chủ đề chính mà người dùng quan tâm.
+2.  Với mỗi chủ đề, hãy hình thành một câu hỏi hoàn chỉnh, tập trung vào bản chất của thông tin cần tìm.
+3.  Nếu người dùng đưa ra một câu lệnh (ví dụ: "so sánh A và B"), hãy chuyển nó thành một hoặc nhiều câu hỏi (ví dụ: "A là gì?", "B là gì?", "Điểm khác biệt giữa A và B là gì?").
+4.  Luôn đảm bảo câu hỏi được viết bằng tiếng Việt chuẩn, không chứa lỗi chính tả.
+
+**ĐIỀU CẦN TRÁNH:**
+*   Không bịa đặt câu hỏi không liên quan đến nội dung.
+*   Không trích xuất các câu chào hỏi, cảm ơn.
+
+**ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC):**
+Chỉ trả về một đối tượng JSON hợp lệ.
+</instructions>
+
+<example>
+**Văn bản đầu vào:** "thủ tục thôi học và điều kiện tốt nghiệp"
+**Kết quả JSON đầu ra:**
+```json
 {{
     "queries": [
-        {{
-            "query": "câu hỏi được viết một cách rõ ràng"
-        }}
+        "thủ tục xin thôi học cho sinh viên là gì?",
+        "điều kiện để được xét tốt nghiệp là gì?"
     ]
 }}
+```
+</example>
 
-Lưu ý:
-- Mỗi query phải là một câu hỏi hoàn chỉnh và rõ ràng
-- Đảm bảo đúng chính tả tiếng Việt
-- Chỉ trả về JSON, không thêm giải thích
-- Nếu không có câu hỏi rõ ràng, hãy tạo ra những câu hỏi có thể liên quan đến nội dung
+<text_to_analyze>
+{text_content}
+</text_to_analyze>
 
-Văn bản cần phân tích:
-{text_content}"""
+Trả về kết quả dưới dạng JSON với format sau:
+```json
+{{
+    "queries": [
+        "câu hỏi 1",
+        "câu hỏi 2"
+    ]
+}}
+```"""
             
             response_text = self.deepseek.send_message(
                 conversation=conversation, 
@@ -511,9 +537,7 @@ Văn bản cần phân tích:
             
             parsed_response = json.loads(response_text.strip())
             
-            queries = [item.get("query", "").strip() 
-                      for item in parsed_response.get("queries", []) 
-                      if item.get("query", "").strip()]
+            queries = [q.strip() for q in parsed_response.get("queries", []) if isinstance(q, str) and q.strip()]
             
             logger.info(f"Successfully extracted {len(queries)} queries from text")
             return (queries if queries else [first_line_fallback]), conversation

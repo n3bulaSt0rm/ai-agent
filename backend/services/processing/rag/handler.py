@@ -5,6 +5,7 @@ import asyncio
 import logging
 import time
 import google.generativeai as genai
+import functools
 
 from datetime import datetime, time as datetime_time
 from typing import Dict, Any, List, Optional, Tuple
@@ -27,7 +28,8 @@ from backend.services.processing.rag.draft_monitor import EmailDraftMonitor
 
 from backend.services.processing.rag.utils import (
     create_deepseek_client, DeepSeekAPIClient, 
-    extract_image_attachments, extract_text_content, extract_all_attachments
+    extract_image_attachments, extract_text_content, extract_all_attachments,
+    call_deepseek_async
 )
 
 from backend.services.processing.rag.extractors.gemini.gemini_email_processor import GeminiEmailProcessor
@@ -809,8 +811,24 @@ YÊU CẦU SOẠN EMAIL:
 CHỈ TRẢ VỀ NỘI DUNG EMAIL:
 """
             
-            response = conversation.send_message(email_prompt)
-            return response.text.strip()
+            final_response = "Có lỗi xảy ra khi tạo phản hồi."
+            if conversation and self.deepseek_client:
+                try:
+                    final_response = self.deepseek_client.send_message(
+                        conversation=conversation,
+                        message=email_prompt,
+                        temperature=0.3,
+                        max_tokens=8192,
+                        error_default="Có lỗi xảy ra khi tạo phản hồi."
+                    )
+                except Exception as e:
+                    logger.error(f"Error in conversation-based response generation: {e}")
+                    final_response = "Xin lỗi, có lỗi xảy ra trong quá trình tạo phản hồi. Vui lòng thử lại sau."
+            else:
+                logger.error("No conversation context available for response generation")
+                final_response = "Không có context cuộc hội thoại để tạo phản hồi."
+            
+            return final_response
             
         except Exception as e:
             logger.error(f"Error generating email response with Gemini: {e}")
@@ -866,7 +884,7 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
             raise
             
     
-    def process_text_with_vietnamese_query_module(self, text_content: str) -> str:
+    async def process_text_with_vietnamese_query_module(self, text_content: str) -> str:
         """
         Process general text content with Vietnamese Query Module and generate comprehensive response
         
@@ -892,109 +910,87 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
                 logger.error("No conversation context available from query module")
                 return "Lỗi: Không có context cuộc hội thoại để xử lý văn bản."
             
-            logger.info(f"Successfully obtained conversation context and {len(results)} query results")
-            
-            logger.info(f"Summarizing {len(results)} results from query module")
-            summarized_results = []
-            
-            for i in range(0, len(results), 2):
-                group = results[i:i+2]  # Get group of 2 (or 1 if odd number)
-                logger.debug(f"Processing group {i//2 + 1}: {len(group)} queries")
-                
-                group_info = ""
-                group_queries = []
-                
-                for j, result in enumerate(group):
-                    query = result.original_query
-                    group_queries.append(query)
-                    
-                    # Format information for this query
-                    if result.results:
-                        group_info += f"Câu hỏi {j+1}: {query}\n"
-                        for k, result_item in enumerate(result.results):
-                            # Extract content and metadata
-                            content = result_item.get("content", "") if isinstance(result_item, dict) else str(result_item)
-                            metadata = result_item.get("metadata", {}) if isinstance(result_item, dict) else {}
-                            file_created_at = metadata.get("file_created_at")
-                            source = metadata.get("source")
-                            
-                            group_info += f"Tài liệu {k+1}:"
-                            if file_created_at:
-                                group_info += f" (Cập nhật: {file_created_at})"
-                            if source and not source.startswith("gmail_thread"):
-                                group_info += f" [Nguồn: {source}]"
-                            group_info += f"\n{content}\n\n"
-                    else:
-                        group_info += f"Câu hỏi {j+1}: {query}\nKhông tìm thấy thông tin liên quan.\n\n"
-                
-                summarization_prompt = f"""
-                Hãy tóm tắt lại các nội dung liên quan đến các câu hỏi và context sau một cách chính xác, đầy đủ thông tin, súc tích:
-                Context: {text_content}
-                
-                Các câu hỏi: {', '.join(group_queries)}
-                
-                Thông tin liên quan:
-                {group_info}
-                
-                LƯU Ý QUAN TRỌNG:
-                - Nếu có nhiều tài liệu về cùng một chủ đề với các ngày cập nhật khác nhau, chỉ sử dụng thông tin từ tài liệu có ngày cập nhật mới nhất, và ghi rõ ngày cập nhật đó trong tóm tắt (ví dụ: "Theo thông tin cập nhật ngày 15/03/2024, thủ tục làm bằng tốt nghiệp yêu cầu...").
-                - Các nội dung không trùng lặp thì không cần ghi rõ ngày cập nhật.
-                - Khi có thông tin nguồn tài liệu, giữ nguyên thông tin nguồn tài liệu để trích dẫn bằng footnotes ở cuối nội dung.
-                """
-                
-                # Use conversation memory to maintain context
-                if conversation and self.deepseek_client:
-                    try:
-                        summary_response = self.deepseek_client.send_message(
-                            conversation=conversation,
-                            message=summarization_prompt,
-                            temperature=0.3,
-                            max_tokens=8000,
-                            error_default=f"Không tìm được thông tin cho các câu hỏi: {', '.join(group_queries)}"
-                        )
-                    except Exception as e:
-                        logger.error(f"Error in conversation-based summarization for queries {group_queries}: {e}")
-                        summary_response = f"Lỗi xử lý thông tin cho các câu hỏi: {', '.join(group_queries)}"
-                else:
-                    logger.error("No conversation context available for summarization")
-                    summary_response = f"Không có context xử lý cho các câu hỏi: {', '.join(group_queries)}"
-                
-                summarized_results.append({
-                    "queries": group_queries,
-                    "summary": summary_response
-                })
-            
-            response_prompt = f"""Bạn là một trợ lý AI hỗ trợ 
-Dưới đây là nội dung cần xử lý:
+            logger.info(f"Successfully obtained conversation context and {len(results)} query results. Generating final response...")
 
+            # Step 1: Filtering & Extraction
+            retrieved_info = ""
+            leaf_extraction_tasks = []
+
+            for result in results:
+                query = result.original_query
+                if result.results:
+                    for item in result.results:
+                        content = item.get("content", "")
+                        if content:
+                            task = self._evaluate_and_extract_leaf_info(query, content)
+                            leaf_extraction_tasks.append((query, item, task))
+            
+            if leaf_extraction_tasks:
+                logger.info(f"Extracting 'Information Leaves' from {len(leaf_extraction_tasks)} retrieved chunks...")
+                extracted_leaves = await asyncio.gather(*(task for _, _, task in leaf_extraction_tasks))
+                logger.info("Extraction complete.")
+
+                for (query, original_item, task), leaf_info in zip(leaf_extraction_tasks, extracted_leaves):
+                    if leaf_info["is_relevant"]:
+                        metadata = original_item.get("metadata", {})
+                        file_created_at = metadata.get("file_created_at")
+                        source = metadata.get("source")
+
+                        retrieved_info += f"### Thông tin liên quan đến câu hỏi: \"{query}\"\n\n"
+                        retrieved_info += f"**Trích xuất từ tài liệu:**"
+                        if source and not source.startswith("gmail_thread"):
+                            retrieved_info += f" [Nguồn: {source}]"
+                        if file_created_at:
+                            retrieved_info += f" (Cập nhật: {file_created_at})"
+                        retrieved_info += f"\n---\n{leaf_info['leaf_content']}\n---\n\n"
+
+            if not retrieved_info:
+                retrieved_info = "Hệ thống không tìm thấy thông tin cụ thể nào sau khi chắt lọc."
+
+            # Step 2: Synthesis & Response
+            final_prompt = f"""
+<instructions>
+**VAI TRÒ:**
+Bạn là một trợ lý AI chuyên gia, có nhiệm vụ tổng hợp thông tin từ các đoạn trích đã được chắt lọc và soạn một câu trả lời cuối cùng, mạch lạc, đầy đủ cho người dùng.
+
+**BỐI CẢNH:**
+Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm kiếm và sau đó chắt lọc để lấy ra những "lá thông tin" (đoạn trích) liên quan nhất dưới đây.
+
+**YÊU CẦU GỐC CỦA NGƯỜI DÙNG:**
+---
 {text_content}
+---
 
-Dựa trên nội dung và thông tin tìm thấy, hãy tạo một phản hồi đầy đủ:
-"""
-            for i, summary in enumerate(summarized_results):
-                response_prompt += f"Nhóm thông tin {i+1}: {summary['summary']}\n"
-            
-            response_prompt += """
-Dựa trên các thông tin trên, hãy tạo một phản hồi đầy đủ:
-- Trình bày bằng tiếng Việt chuẩn, đúng chính tả, dễ hiểu.
-- ĐẶC BIỆT QUAN TRỌNG: Viết phản hồi dưới dạng văn bản thuần (plain text), KHÔNG sử dụng markdown format hay bất kỳ định dạng nào khác.
-- Trả lời lần lượt từng câu hỏi hoặc vấn đề được đặt ra, dựa vào thông tin đã tóm tắt.
-- ĐẶC BIỆT QUAN TRỌNG: Nếu biết thông tin được cập nhật vào ngày nào (có ngày cập nhật cụ thể), hãy ghi rõ ngày cập nhật đó trong câu trả lời để người dùng biết đây là thông tin mới nhất. Ví dụ: "Theo thông tin cập nhật ngày 15/03/2024, quy trình đăng ký học phần đã thay đổi..."
-- ĐẶC BIỆT QUAN TRỌNG: Khi có thông tin nguồn tài liệu, hãy trích dẫn nguồn thông tin ở cuối phản hồi và đánh dấu footnotes ở phần thông tin.
-- Đối với các thông tin không có ngày cập nhật cụ thể, trả lời bình thường không cần ghi ngày.
-- Đảm bảo phản hồi có cấu trúc rõ ràng: giới thiệu ngắn, nội dung chính, kết luận.
+**CÁC LÁ THÔNG TIN ĐÃ ĐƯỢC CHẮT LỌC:**
+---
+{retrieved_info}
+---
 
-Viết phản hồi ngay dưới đây (chỉ trả về nội dung thuần (plain text)):
+**NHIỆM VỤ:**
+Dựa trên **YÊU CẦU GỐC** và các **LÁ THÔNG TIN**, hãy thực hiện các bước sau:
+1.  **Tổng hợp (Synthesize):** Đọc và hiểu tất cả các lá thông tin. Liên kết chúng lại để tạo thành một bức tranh toàn cảnh.
+2.  **Lọc và Ưu tiên (Filter & Prioritize):** Nếu có thông tin mâu thuẫn, hãy ưu tiên thông tin có ngày cập nhật mới nhất.
+3.  **Soạn thảo (Draft):** Viết một câu trả lời hoàn chỉnh, duy nhất.
+
+**QUY TẮC SOẠN THẢO (BẮT BUỘC):**
+*   **Định dạng:** Chỉ sử dụng văn bản thuần (plain text). KHÔNG DÙNG MARKDOWN.
+*   **Cấu trúc:** Mở đầu ngắn gọn, đi thẳng vào nội dung chính, trả lời lần lượt từng ý trong yêu cầu của người dùng, và kết luận.
+*   **Trích dẫn ngày:** Khi sử dụng thông tin có ngày cập nhật, PHẢI ghi rõ trong câu trả lời (ví dụ: "Theo quy định cập nhật ngày 15/03/2024,...").
+*   **Trích dẫn nguồn:** Nếu thông tin có nguồn, hãy đánh số footnote trong câu trả lời (ví dụ: `...nội dung [1].`) và liệt kê danh sách nguồn ở cuối cùng dưới tiêu đề `NGUỒN THAM KHẢO:`.
+*   **Trung thực:** Nếu sau khi chắt lọc vẫn không có thông tin cho một ý nào đó, hãy nói rõ "Hiện tại hệ thống không tìm thấy thông tin chi tiết về...".
+
+Viết câu trả lời cuối cùng ngay dưới đây.
+</instructions>
 """
-            
-            # Use conversation memory for final response generation
+
+            final_response = "Có lỗi xảy ra khi tạo phản hồi."
             if conversation and self.deepseek_client:
                 try:
                     final_response = self.deepseek_client.send_message(
                         conversation=conversation,
-                        message=response_prompt,
-                        temperature=0.5,
-                        max_tokens=4000,
+                        message=final_prompt,
+                        temperature=0.3,
+                        max_tokens=8192,
                         error_default="Có lỗi xảy ra khi tạo phản hồi."
                     )
                 except Exception as e:
@@ -1009,6 +1005,70 @@ Viết phản hồi ngay dưới đây (chỉ trả về nội dung thuần (pla
         except Exception as e:
             logger.warning(f"Error processing text with Vietnamese Query Module: {e}")
             return "Xin lỗi, có lỗi xảy ra khi xử lý văn bản. Vui lòng thử lại sau."
+
+    async def _evaluate_and_extract_leaf_info(self, query: str, chunk_content: str) -> Dict[str, Any]:
+        """
+        C-RAG evaluation: Critique if chunk is relevant, then extract key information.
+        Designed for concurrent execution without shared state.
+        """
+        if not query or not chunk_content or not self.deepseek_client:
+            return {"is_relevant": False, "leaf_content": ""}
+
+        try:
+            system_message = "Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng trong hệ thống RAG."
+            
+            user_message = f"""
+<instructions>
+**VAI TRÒ:**
+Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng trong hệ thống RAG.
+
+**NHIỆM VỤ:**
+Bạn sẽ thực hiện một quy trình 2 bước:
+1.  **Bước 1: Đánh giá (Critique):** Đọc kỹ câu hỏi và văn bản. Quyết định xem văn bản này có chứa câu trả lời trực tiếp hoặc thông tin cực kỳ liên quan đến câu hỏi hay không.
+2.  **Bước 2: Trích xuất (Extract):** Nếu và chỉ nếu văn bản được đánh giá là có liên quan, hãy trích xuất nguyên văn những câu hoặc cụm câu trả lời cho câu hỏi đó.
+
+**CÂU HỎI GỐC:**
+---
+{query}
+---
+
+**VĂN BẢN CẦN ĐÁNH GIÁ VÀ TRÍCH XUẤT:**
+---
+{chunk_content}
+---
+
+**ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC):**
+Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau:
+```json
+{{
+  "is_relevant": <true nếu văn bản có liên quan, ngược lại false>,
+  "leaf_content": "<nội dung được trích xuất nếu is_relevant là true, ngược lại là chuỗi rỗng>"
+}}
+```
+</instructions>
+"""
+            
+            response_text = await call_deepseek_async(
+                deepseek_client=self.deepseek_client,
+                system_message=system_message,
+                user_message=user_message,
+                temperature=0.0,
+                max_tokens=4000,
+                error_default='{"is_relevant": false, "leaf_content": ""}'
+            )
+            
+            # Clean and parse JSON
+            response_text = response_text.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            
+            return json.loads(response_text.strip())
+            
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error during C-RAG evaluation for query '{query}': {e}")
+            return {"is_relevant": False, "leaf_content": ""}
 
     def _search_multiple_collections(self, question: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """

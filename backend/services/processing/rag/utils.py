@@ -5,6 +5,7 @@ Shared utilities for RAG processing services.
 import logging
 import time
 import base64
+import asyncio
 from typing import Dict, Any, List, Optional
 
 from langchain_deepseek import ChatDeepSeek
@@ -487,3 +488,36 @@ def run_cron_scheduler(cron_expression: str, worker_func, worker_name: str, is_s
     except Exception as e:
         logger.error(f"Fatal error in {worker_name} scheduler: {e}")
         raise 
+
+async def call_deepseek_async(
+    deepseek_client: DeepSeekAPIClient,
+    system_message: str,
+    user_message: str,
+    temperature: float = 0.4,
+    max_tokens: int = 4000,
+    error_default: str = None
+) -> str:
+    """
+    Simple async DeepSeek API call without conversation state.
+    Perfect for stateless, independent parallel calls.
+    """
+    try:
+        temp_conversation = await asyncio.to_thread(
+            deepseek_client.start_conversation, 
+            system_message
+        )
+        
+        response = await asyncio.to_thread(
+            deepseek_client.send_message,
+            conversation=temp_conversation,
+            message=user_message,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            error_default=error_default
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in async DeepSeek call: {e}")
+        return error_default or "Lỗi khi gọi DeepSeek API" 

@@ -148,7 +148,7 @@ async def process_text_endpoint(request: TextProcessRequest):
         logger.info(f"Processing text request with {len(request.text)} characters")
         
         # Process the text using the Gmail handler's Vietnamese Query Module
-        response = modules.gmail_handler.process_text_with_vietnamese_query_module(request.text)
+        response = await modules.gmail_handler.process_text_with_vietnamese_query_module(request.text)
         
         if not response:
             raise HTTPException(status_code=500, detail="Failed to process text")
@@ -414,6 +414,7 @@ async def process_txt_document(message_data: Dict[str, Any]) -> None:
     file_id = message_data.get("file_id")
     file_path = message_data.get("file_path")
     file_created_at = message_data.get("file_created_at")
+    source = message_data.get("source")
 
     logger.info(f"Started processing text document: {file_id} at {file_path}")
     
@@ -464,7 +465,9 @@ async def process_txt_document(message_data: Dict[str, Any]) -> None:
             })
         
         # Step 4: Create chunk objects
-        chunk_objects = create_chunk_objects(processed_chunks, file_id, file_created_at, file_path)
+        # Use source if available (for txt files), otherwise fall back to file_path
+        source_info = source if source else file_path
+        chunk_objects = create_chunk_objects(processed_chunks, file_id, file_created_at, source_info)
         
         # Step 5: Embed and store chunks
         stored_count = embed_and_store_chunks(chunk_objects, file_id)
@@ -527,21 +530,14 @@ async def handle_document_deletion_status(message_data: Dict[str, Any]) -> None:
             result = qdrant_manager.update_is_deleted_flag(file_id, True)
             
             if result:
-                # Get current status to save as previous_status
+                # Simply set status to 'deleted' without saving previous_status
                 with sqlite3.connect(str(DB_PATH)) as db_conn:
-                    status_query = db_conn.execute("SELECT status FROM files_management WHERE uuid = ?", (file_id,))
-                    current_status = status_query.fetchone()
-                    
-                    if current_status:
-                        # Save current status as previous_status and set status to 'deleted'
-                        db_conn.execute(
-                            "UPDATE files_management SET status = ?, previous_status = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
-                            (FileStatus.DELETED, current_status[0], file_id)
-                        )
-                        db_conn.commit()
-                        logger.info(f"Document {file_id} marked as deleted, previous status saved: {current_status[0]}")
-                    else:
-                        logger.warning(f"File {file_id} not found in database")
+                    db_conn.execute(
+                        "UPDATE files_management SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE uuid = ?",
+                        (FileStatus.DELETED, file_id)
+                    )
+                    db_conn.commit()
+                    logger.info(f"Document {file_id} marked as deleted")
             else:
                 logger.error(f"Failed to update is_deleted flag in Qdrant for file {file_id}")
                 
@@ -688,7 +684,7 @@ def initialize_modules():
             sparse_model_name=settings.SPARSE_MODEL_NAME,
             reranker_model_name=settings.RERANKER_MODEL_NAME,
             vector_size=VECTOR_SIZE,
-            memory_manager=modules.cuda_memory_manager  
+            memory_manager=modules.cuda_memory_manager
         )
         logger.info("Vietnamese Embedding Module initialized successfully")
         
@@ -734,8 +730,6 @@ async def startup():
         logger.info("Starting Gmail monitoring with shared handler...")
         asyncio.create_task(start_gmail_monitoring(gmail_handler=modules.gmail_handler))
         logger.info("Gmail monitoring started successfully")
-        
-
         
         logger.info("All startup tasks completed successfully")
         

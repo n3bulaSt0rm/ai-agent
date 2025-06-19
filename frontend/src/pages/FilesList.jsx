@@ -530,7 +530,7 @@ const FilesList = () => {
     
     try {
       // Call API to upload file
-      const uploadedFile = await filesApi.uploadFile(selectedFile, selectedFile.description, selectedFile.fileCreatedAt, selectedFile.keywords);
+      const uploadedFile = await filesApi.uploadFile(selectedFile, selectedFile.description, selectedFile.fileCreatedAt, selectedFile.keywords, selectedFile.source);
       
       // Add file to documents list
       setDocuments([uploadedFile, ...documents]);
@@ -1145,7 +1145,7 @@ const FilesList = () => {
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
                               </svg>
                             </button>
-                            {doc.status === 'pending_upload' || doc.status === 'pending' ? (
+                            {(doc.status === 'pending_upload' || doc.status === 'pending' || doc.status === 'error') ? (
                               <button 
                                 className="action-icon process-btn" 
                                 onClick={() => handleProcess(doc)}
@@ -1436,6 +1436,19 @@ const FilesList = () => {
                       </div>
                     </div>
                   </div>
+                  {/* Show source field only for txt files */}
+                  {fileToView.type === 'txt' && fileToView.source && (
+                    <div className="detail-row">
+                      <span className="detail-label">Source:</span>
+                      <span className="detail-value" style={{ 
+                        wordBreak: 'break-all',
+                        fontSize: '14px',
+                        color: '#1e293b'
+                      }}>
+                        {fileToView.source}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 
                 <div className="detail-section">
@@ -1547,7 +1560,7 @@ const FilesList = () => {
                   <PencilIcon className="w-5 h-5 mr-2" />
                   Update Document
                 </button>
-                {fileToView.status === 'pending_upload' || fileToView.status === 'pending' ? (
+                {(fileToView.status === 'pending_upload' || fileToView.status === 'pending' || fileToView.status === 'error') ? (
                   <button 
                     className="btn-primary"
                     onClick={() => {
