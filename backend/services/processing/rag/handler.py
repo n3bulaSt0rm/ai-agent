@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 import time
+import uuid
 import google.generativeai as genai
 import functools
 
@@ -38,6 +39,10 @@ from backend.services.processing.rag.gmail_indexing_worker import GmailIndexingW
 from backend.services.processing.rag.gmail_cleanup_worker import GmailCleanupWorker
 
 logger = logging.getLogger(__name__)
+
+# Create log directory for query processing
+QUERY_LOG_DIR = Path(__file__).resolve().parents[4] / "logs" / "query_processing"
+QUERY_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 class GmailHandler:
     """
@@ -884,6 +889,41 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
             raise
             
     
+    def _save_query_processing_log(self, text_content: str, results: List, leaf_extraction_data: List, final_response: str, session_id: str) -> None:
+        try:
+            leaf_content_map = {}
+            for query, original_item, leaf_info in leaf_extraction_data:
+                if leaf_info.get("is_relevant", False):
+                    if query not in leaf_content_map:
+                        leaf_content_map[query] = []
+                    leaf_content_map[query].append(leaf_info.get("leaf_content", ""))
+            
+            for i, result in enumerate(results):
+                query = result.original_query
+                safe_query_name = "".join(c for c in query if c.isalnum() or c in (' ', '-', '_')).rstrip()[:50]
+                query_folder_name = f"query_{i+1:02d}_{safe_query_name}"
+                query_folder = QUERY_LOG_DIR / session_id / query_folder_name
+                query_folder.mkdir(parents=True, exist_ok=True)
+                
+                query_results_data = {
+                    "original_text": text_content,
+                    "query": query,
+                    "results": [{"content": item.get("content", ""), "score": item.get("score", 0.0)} for item in result.results]
+                }
+                
+                with open(query_folder / "01_search_results.json", 'w', encoding='utf-8') as f:
+                    json.dump(query_results_data, f, ensure_ascii=False, indent=2)
+                
+                leaf_data = {"query": query, "leaf_contents": leaf_content_map.get(query, [])}
+                
+                with open(query_folder / "02_leaf_content.json", 'w', encoding='utf-8') as f:
+                    json.dump(leaf_data, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"Saved {len(results)} query folders in session: {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error saving query logs: {e}")
+
     async def process_text_with_vietnamese_query_module(self, text_content: str) -> str:
         """
         Process general text content with Vietnamese Query Module and generate comprehensive response
@@ -894,11 +934,14 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
         Returns:
             str: Comprehensive response with information and sources
         """
+        # Generate unique session ID for this processing session
+        session_id = f"query_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        
         try:
             if self.query_module is None:
                 self._init_query_module()
             
-            logger.info("Processing text with Vietnamese Query Module")
+            logger.info(f"Processing text with Vietnamese Query Module - Session: {session_id}")
             results, conversation = self.query_module.process_text(text_content)
             
             if not results:
@@ -925,12 +968,16 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
                             task = self._evaluate_and_extract_leaf_info(query, content)
                             leaf_extraction_tasks.append((query, item, task))
             
+            leaf_extraction_data = []
             if leaf_extraction_tasks:
-                logger.info(f"Extracting 'Information Leaves' from {len(leaf_extraction_tasks)} retrieved chunks...")
+                logger.info(f"Extracting 'Core Snippets' from {len(leaf_extraction_tasks)} retrieved chunks...")
                 extracted_leaves = await asyncio.gather(*(task for _, _, task in leaf_extraction_tasks))
                 logger.info("Extraction complete.")
 
                 for (query, original_item, task), leaf_info in zip(leaf_extraction_tasks, extracted_leaves):
+                    # Store for logging
+                    leaf_extraction_data.append((query, original_item, leaf_info))
+                    
                     if leaf_info["is_relevant"]:
                         metadata = original_item.get("metadata", {})
                         file_created_at = metadata.get("file_created_at")
@@ -954,21 +1001,21 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
 Bạn là một trợ lý AI chuyên gia, có nhiệm vụ tổng hợp thông tin từ các đoạn trích đã được chắt lọc và soạn một câu trả lời cuối cùng, mạch lạc, đầy đủ cho người dùng.
 
 **BỐI CẢNH:**
-Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm kiếm và sau đó chắt lọc để lấy ra những "lá thông tin" (đoạn trích) liên quan nhất dưới đây.
+Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm kiếm và sau đó chắt lọc để lấy ra những **đoạn trích cốt lõi** liên quan nhất dưới đây.
 
 **YÊU CẦU GỐC CỦA NGƯỜI DÙNG:**
 ---
 {text_content}
 ---
 
-**CÁC LÁ THÔNG TIN ĐÃ ĐƯỢC CHẮT LỌC:**
+**CÁC ĐOẠN TRÍCH CỐT LÕI ĐÃ ĐƯỢC CHẮT LỌC:**
 ---
 {retrieved_info}
 ---
 
 **NHIỆM VỤ:**
-Dựa trên **YÊU CẦU GỐC** và các **LÁ THÔNG TIN**, hãy thực hiện các bước sau:
-1.  **Tổng hợp (Synthesize):** Đọc và hiểu tất cả các lá thông tin. Liên kết chúng lại để tạo thành một bức tranh toàn cảnh.
+Dựa trên **YÊU CẦU GỐC** và các **ĐOẠN TRÍCH CỐT LÕI**, hãy thực hiện các bước sau:
+1.  **Tổng hợp (Synthesize):** Đọc và hiểu tất cả các đoạn trích cốt lõi. Liên kết chúng lại để tạo thành một bức tranh toàn cảnh.
 2.  **Lọc và Ưu tiên (Filter & Prioritize):** Nếu có thông tin mâu thuẫn, hãy ưu tiên thông tin có ngày cập nhật mới nhất.
 3.  **Soạn thảo (Draft):** Viết một câu trả lời hoàn chỉnh, duy nhất.
 
@@ -976,7 +1023,7 @@ Dựa trên **YÊU CẦU GỐC** và các **LÁ THÔNG TIN**, hãy thực hiện
 *   **Định dạng:** Chỉ sử dụng văn bản thuần (plain text). KHÔNG DÙNG MARKDOWN.
 *   **Cấu trúc:** Mở đầu ngắn gọn, đi thẳng vào nội dung chính, trả lời lần lượt từng ý trong yêu cầu của người dùng, và kết luận.
 *   **Trích dẫn ngày:** Khi sử dụng thông tin có ngày cập nhật, PHẢI ghi rõ trong câu trả lời (ví dụ: "Theo quy định cập nhật ngày 15/03/2024,...").
-*   **Trích dẫn nguồn:** Nếu thông tin có nguồn, hãy đánh số footnote trong câu trả lời (ví dụ: `...nội dung [1].`) và liệt kê danh sách nguồn ở cuối cùng dưới tiêu đề `NGUỒN THAM KHẢO:`.
+*   **Trích dẫn nguồn:** Nếu thông tin có nguồn, hãy đánh số footnote trong câu trả lời (ví dụ: `...nội dung [1].`) và liệt kê danh sách nguồn ở cuối cùng dưới tiêu đề `NGUỒN THAM KHẢO:`. Nếu không có thông tin nào được trích xuất từ nguồn, **TUYỆT ĐỐI KHÔNG** hiển thị mục "NGUỒN THAM KHẢO".
 *   **Trung thực:** Nếu sau khi chắt lọc vẫn không có thông tin cho một ý nào đó, hãy nói rõ "Hiện tại hệ thống không tìm thấy thông tin chi tiết về...".
 
 Viết câu trả lời cuối cùng ngay dưới đây.
@@ -999,6 +1046,9 @@ Viết câu trả lời cuối cùng ngay dưới đây.
             else:
                 logger.error("No conversation context available for response generation")
                 final_response = "Không có context cuộc hội thoại để tạo phản hồi."
+            
+            # Save logs
+            self._save_query_processing_log(text_content, results, leaf_extraction_data, final_response, session_id)
             
             return final_response
             
@@ -1025,7 +1075,7 @@ Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt 
 **NHIỆM VỤ:**
 Bạn sẽ thực hiện một quy trình 2 bước:
 1.  **Bước 1: Đánh giá (Critique):** Đọc kỹ câu hỏi và văn bản. Quyết định xem văn bản này có chứa câu trả lời trực tiếp hoặc thông tin cực kỳ liên quan đến câu hỏi hay không.
-2.  **Bước 2: Trích xuất (Extract):** Nếu và chỉ nếu văn bản được đánh giá là có liên quan, hãy trích xuất nguyên văn những câu hoặc cụm câu trả lời cho câu hỏi đó.
+2.  **Bước 2: Trích xuất (Extract):** Nếu và chỉ nếu văn bản được đánh giá là có liên quan, hãy trích xuất nguyên văn những câu hoặc cụm câu trả lời cho câu hỏi đó thành một **đoạn trích cốt lõi**.
 
 **CÂU HỎI GỐC:**
 ---

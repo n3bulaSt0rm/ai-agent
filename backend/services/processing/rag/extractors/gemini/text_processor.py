@@ -17,6 +17,7 @@ import logging
 import requests
 import tempfile
 import os
+import re
 from typing import List, Dict, Any, Optional
 
 import google.generativeai as genai
@@ -84,63 +85,101 @@ class GeminiTextProcessor:
             prompt = """
 <instructions>
 **VAI TRÒ VÀ MỤC TIÊU:**
-Bạn là một AI chuyên gia về xử lý ngôn ngữ, có nhiệm vụ tiền xử lý tài liệu cho hệ thống Retrieval-Augmented Generation (RAG). Mục tiêu của bạn là chia văn bản thành các khối (chunk) độc lập, giàu ngữ nghĩa và được tối ưu cho hệ thống tìm kiếm lai (hybrid search).
+Bạn là một AI chuyên gia về xử lý ngôn ngữ, có nhiệm vụ tiền xử lý tài liệu cho hệ thống Retrieval-Augmented Generation (RAG). Mục tiêu của bạn là phân tích một tài liệu, tự động xác định các "khối nội dung" (content blocks) bên trong — đó có thể là văn bản tự do hoặc bảng dữ liệu — và áp dụng chiến lược chia khối (chunking) phù hợp nhất cho từng khối để tạo ra các chunk độc lập và giàu ngữ cảnh.
+
+**QUY TRÌNH SUY LUẬN TỔNG QUÁT (BẮT BUỘC):**
+
+1.  **Bước 1: Phân Đoạn Thành Các Khối Nội Dung (Content Blocks)**
+    *   Quét toàn bộ tài liệu và xác định các khối nội dung riêng biệt. Một khối được định nghĩa là một cụm văn bản tự do liên tục hoặc một bảng dữ liệu hoàn chỉnh (bao gồm các dòng metadata, header, và data của nó).
+    *   Xử lý từng khối một theo thứ tự xuất hiện.
+
+2.  **Bước 2: Áp Dụng Chiến Lược Phù Hợp Cho Từng Khối**
+    *   **Đối với mỗi khối, hãy tự hỏi:** "Đây là khối văn bản tự do hay khối dữ liệu dạng bảng?"
+    *   Nếu là **khối văn bản tự do**, hãy áp dụng **Quy Tắc Chunking Văn Bản**.
+    *   Nếu là **khối dữ liệu dạng bảng**, hãy áp dụng **Quy Tắc Chunking Dữ Liệu Bảng**.
+
+---
+
+### **QUY TẮC CHUNKING VĂN BẢN**
+*(Áp dụng cho các khối văn bản tự do, không có cấu trúc bảng. Dựa trên hệ thống quy tắc có thứ tự ưu tiên.)*
 
 **HỆ THỐNG QUY TẮC ƯU TIÊN (HIERARCHY OF RULES):**
 Bạn PHẢI tuân thủ các quy tắc theo thứ tự ưu tiên từ cao đến thấp sau đây:
 
 1.  **ƯU TIÊN #1 (BẮT BUỘC TUYỆT ĐỐI): RÀNG BUỘC KỸ THUẬT**
-    *   Mỗi chunk **TUYỆT ĐỐI KHÔNG** được dài quá **1200 từ** để đảm bảo tương thích với model embedding (giới hạn 2048 tokens).
+    *   Mỗi chunk **TUYỆT ĐỐI KHÔNG** được dài quá **1200 từ**.
 
 2.  **ƯU TIÊN #2 (CỰC KỲ QUAN TRỌNG): TÍNH TOÀN VẸN NGỮ NGHĨA VÀ CẤU TRÚC**
-    *   **Gói Gọn Ý Nghĩa:** Mỗi chunk phải là một đơn vị thông tin hoàn chỉnh, trả lời trọn vẹn một câu hỏi hoặc mô tả đầy đủ một quy trình.
-    *   **Tôn Trọng Cấu Trúc:** KHÔNG BAO GIỜ ngắt giữa chừng một danh sách, một bảng biểu, hoặc một bộ hướng dẫn logic.
-    *   **QUY TẮC VÀNG:** Một quy trình hướng dẫn hoàn chỉnh cho một đối tượng cụ thể (ví dụ: "hướng dẫn cho sinh viên tốt nghiệp") PHẢI nằm trong MỘT chunk duy nhất, ngay cả khi nó dài hơn kích thước đề xuất ở Ưu tiên #3.
+    *   **QUY TẮC VÀNG:** Một quy trình hướng dẫn hoàn chỉnh, một luận điểm, hoặc toàn bộ thông tin cho một đối tượng cụ thể (ví dụ: "toàn bộ hướng dẫn cho sinh viên tốt nghiệp") PHẢI nằm trong **MỘT chunk duy nhất**.
+    *   **Gói Gọn Ý Nghĩa:** Chunk phải là một đơn vị thông tin hoàn chỉnh.
+    *   **Tôn Trọng Cấu Trúc:** KHÔNG BAO GIỜ ngắt giữa chừng một danh sách, một quy trình logic.
 
 3.  **ƯU TIÊN #3 (KHUYẾN NGHỊ TỐI ƯU): KÍCH THƯỚC THÍCH ỨNG**
-    *   Chỉ khi đã đảm bảo Ưu tiên #2, hãy cố gắng điều chỉnh kích thước chunk để tối ưu hóa hiệu suất tìm kiếm.
-    *   **Văn bản có cấu trúc cao (luật, hướng dẫn):** Hướng đến chunk nhỏ hơn, khoảng **100-250 từ**.
-    *   **Văn bản thông thường:** Hướng đến khoảng **200-400 từ**.
-    *   **Văn bản tường thuật:** Có thể dùng chunk lớn hơn, **350-550 từ**.
+    *   **Chỉ khi đã đảm bảo Ưu tiên #2**, hãy cố gắng điều chỉnh kích thước chunk để tối ưu hiệu suất tìm kiếm:
+    *   **Văn bản có cấu trúc cao (luật, hướng dẫn chi tiết):** Hướng đến chunk nhỏ hơn, khoảng **100-250 từ**.
+    *   **Văn bản thông thường (bài báo, mô tả):** Hướng đến khoảng **200-400 từ**.
+    *   **Văn bản tường thuật (câu chuyện):** Có thể dùng chunk lớn hơn, **350-550 từ**.
 
-**QUY TRÌNH SUY LUẬN (CHAIN-OF-THOUGHT):**
-1.  **Bước 1: Quét Toàn Diện:** Đọc toàn bộ tài liệu để nắm bắt các chủ đề và đối tượng chính.
-2.  **Bước 2: Xác Định Các Khối Logic:** Tìm các khối văn bản phục vụ một mục đích hoặc một đối tượng duy nhất (ví dụ: khối hướng dẫn cho sinh viên tốt nghiệp, khối hướng dẫn cho sinh viên thôi học). Đây là các chunk nháp.
-3.  **Bước 3: Rà Soát và Gộp Chunk (QUAN TRỌNG):** Nhìn lại các chunk nháp. Nếu một quy trình bị chia thành nhiều chunk, hãy **GỘP CHÚNG LẠI** thành một chunk duy nhất để đảm bảo tuân thủ **ƯU TIÊN #2**.
-4.  **Bước 4: Kiểm Tra Ràng Buộc Cuối Cùng:** Đảm bảo không có chunk nào vi phạm **ƯU TIÊN #1**.
-5.  **Bước 5: Xuất Kết Quả:** Định dạng danh sách các chunk cuối cùng thành JSON.
+**QUY TRÌNH SUY LUẬN CHO VĂN BẢN (CHAIN-OF-THOUGHT):**
+1.  **Quét Toàn Diện:** Đọc khối văn bản để nắm bắt các chủ đề và đối tượng chính.
+2.  **Xác Định & Gộp Các Khối Logic:** Tìm các khối văn bản phục vụ một mục đích/đối tượng duy nhất và gộp chúng lại để tuân thủ **ƯU TIÊN #2**. Đây là các chunk chính.
+3.  **Làm Giàu Ngữ Cảnh:** Với mỗi chunk, thực hiện 2 việc:
+    *   Tự động **tạo một dòng tiêu đề mô tả** cho chunk.
+    *   **Giải quyết tham chiếu chéo** bên trong nó bằng cách tìm và nhúng tóm tắt nội dung được tham chiếu.
+4.  **Rà Soát & Tối Ưu Hóa:** Nhìn lại các chunk đã tạo, kiểm tra lại các quy tắc và điều chỉnh kích thước (nếu có thể) theo **ƯU TIÊN #3**.
+5.  **Kiểm Tra Ràng Buộc Cuối Cùng:** Đảm bảo không có chunk nào vi phạm **ƯU TIÊN #1**.
+
+---
+
+### **QUY TẮC CHUNKING DỮ LIỆU BẢNG**
+*(Áp dụng cho các khối chứa dữ liệu dạng bảng/CSV)*
+
+1.  **Mục tiêu:** Trích xuất chính xác thông tin từ mỗi hàng, bảo toàn mối quan hệ và ngữ cảnh.
+2.  **Thực thi (Chain-of-Thought cho bảng):**
+    *   **a. Phân loại dòng trong khối:** Gán nhãn cho mỗi dòng là `metadata`, `table_header`, `data_row`, hoặc `blank_row`.
+    *   **b. Tạo chunk:**
+        *   Mỗi dòng `metadata` trở thành một chunk riêng biệt, diễn giải dưới dạng câu văn (ví dụ: "Tiêu đề: [nội dung metadata]").
+        *   Bỏ qua các `blank_row`.
+        *   Với mỗi `data_row`, tạo **một chunk duy nhất**. Chunk này phải là một câu văn hoàn chỉnh, diễn giải mối quan hệ dữ liệu trong hàng đó bằng cách sử dụng thông tin từ `table_header`.
+        *   Nếu thiếu dữ liệu, hãy ghi nhận điều đó một cách rõ ràng.
+
+---
+
+**RÀNG BUỘC KỸ THUẬT CHUNG:**
+*   Mỗi chunk **TUYỆT ĐỐI KHÔNG** được dài quá **1200 từ**.
+*   Chỉ trả về MỘT chuỗi văn bản duy nhất. Các chunk được phân tách với nhau bởi chuỗi ký tự: `<CHUNK_SEPARATOR>`. **KHÔNG** trả về JSON hay bất kỳ định dạng nào khác.
 </instructions>
 
 <example>
-### VÍ DỤ MẪU ###
+### VÍ DỤ MẪU (Tài liệu kết hợp văn bản có tham chiếu chéo và bảng) ###
 
-**Văn bản đầu vào:**
-"Điều 1. Về việc xét tốt nghiệp
-1. Sinh viên được xét tốt nghiệp khi tích lũy đủ số tín chỉ quy định trong chương trình đào tạo và không còn nợ môn. Điểm trung bình tích lũy phải đạt từ 2.0 trở lên.
-2. Ngoài ra, sinh viên phải hoàn thành các chứng chỉ Giáo dục Quốc phòng và Giáo dục Thể chất.
+**Văn bản đầu vào (nội dung file .txt):**
+\"\"\"
+Với các bạn tốt nghiệp đợt 2023.3:
+Ngày 10,11.5.25, Nhà trường trả hồ sơ tại Hội thảo C2.
+Từ 12 - 22.5.2025, các bạn nhận hồ sơ tại phòng 103 - C1.
+Lưu ý: Bằng và bảng điểm nhận tại Văn phòng Trường.
 
-Điều 2. Về thủ tục
-Để được công nhận tốt nghiệp, sinh viên cần nộp đơn tại Phòng Công tác sinh viên (Phòng A1) và các chứng chỉ ngoại ngữ theo yêu cầu của nhà trường trước ngày 30/06 hàng năm. Lệ phí xét tốt nghiệp là 500,000 VNĐ."
+Với sinh viên thôi học:
+Liên hệ với Ban Đào tạo để làm đơn. Sau đó, đem quyết định thôi học đến phòng 102 - C1 để đăng ký.
 
-**Kết quả JSON đầu ra:**
-```json
-{
-  "chunks": [
-    {
-      "chunk_id": 0,
-      "content": "Điều 1. Về việc xét tốt nghiệp\n1. Sinh viên được xét tốt nghiệp khi tích lũy đủ số tín chỉ quy định trong chương trình đào tạo và không còn nợ môn. Điểm trung bình tích lũy phải đạt từ 2.0 trở lên.\n2. Ngoài ra, sinh viên phải hoàn thành các chứng chỉ Giáo dục Quốc phòng và Giáo dục Thể chất."
-    },
-    {
-      "chunk_id": 1,
-      "content": "Điều 2. Về thủ tục\nĐể được công nhận tốt nghiệp, sinh viên cần nộp đơn tại Phòng Công tác sinh viên (Phòng A1) và các chứng chỉ ngoại ngữ theo yêu cầu của nhà trường trước ngày 30/06 hàng năm. Lệ phí xét tốt nghiệp là 500,000 VNĐ."
-    }
-  ]
-}
-```
+DANH SÁCH HỌC PHẦN THAY THẾ
+Học phần học thay thế (mới),Tên HP,Học phần trong CTĐT không còn mở lớp (cũ),Tên HP
+IT4651,Thiết kế và triển khai mạng IP,IT4601,Thiết bị truyền thông và mạng
+\"\"\"
+
+**Kết quả đầu ra (một chuỗi văn bản duy nhất):**
+Chủ đề: Hướng dẫn nhận hồ sơ cho sinh viên tốt nghiệp đợt 2023.3.
+Với các bạn tốt nghiệp đợt 2023.3:
+Ngày 10,11.5.25, Nhà trường trả hồ sơ tại Hội thảo C2.
+Từ 12 - 22.5.2025, các bạn nhận hồ sơ tại phòng 103 - C1.
+Lưu ý: Bằng và bảng điểm nhận tại Văn phòng Trường.<CHUNK_SEPARATOR>Chủ đề: Hướng dẫn rút hồ sơ cho sinh viên thôi học.
+Với sinh viên thôi học:
+Liên hệ với Ban Đào tạo để làm đơn. Sau đó, đem quyết định thôi học đến phòng 102 - C1 để đăng ký.<CHUNK_SEPARATOR>Tiêu đề: DANH SÁCH HỌC PHẦN THAY THẾ<CHUNK_SEPARATOR>Học phần mới 'Thiết kế và triển khai mạng IP' (Mã: IT4651) thay thế cho học phần cũ 'Thiết bị truyền thông và mạng' (Mã: IT4601).
 </example>
 
 **ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC):**
-Chỉ trả về một đối tượng JSON hợp lệ theo cấu trúc trong ví dụ. KHÔNG thêm bất kỳ văn bản, giải thích hay định dạng markdown nào khác bên ngoài đối tượng JSON.
+Chỉ trả về MỘT chuỗi văn bản duy nhất. Các chunk được phân tách với nhau bởi chuỗi ký tự: `<CHUNK_SEPARATOR>`. **KHÔNG** trả về JSON hay bất kỳ định dạng nào khác.
 """
             
             logger.info("Generating chunks with Gemini")
@@ -149,7 +188,6 @@ Chỉ trả về một đối tượng JSON hợp lệ theo cấu trúc trong v�
             generation_config = {
                 "temperature": 0.2,
                 "max_output_tokens": 8192,
-                "response_mime_type": "application/json",
             }
 
             response = model.generate_content(
@@ -158,24 +196,47 @@ Chỉ trả về một đối tượng JSON hợp lệ theo cấu trúc trong v�
             )
             
             # Step 5: Parse response
-            # With response_mime_type="application/json", the output is a clean JSON string.
-            response_text = response.text
-            logger.info(f"Received response from Gemini: {response_text}...")
-            
+            response_text = ""
             try:
-                data = json.loads(response_text)
-                chunks = data.get("chunks", [])
-                
-                if not chunks:
-                    raise ValueError("No chunks found in response")
-                
-                logger.info(f"Successfully created {len(chunks)} chunks")
-                return chunks
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON response: {e}")
-                logger.error(f"Response text: {response_text}")
-                raise ValueError("Invalid JSON response from Gemini")
+                # The .text accessor can raise a ValueError if the response is blocked.
+                response_text = response.text
+            except ValueError:
+                # If response.text fails, check candidate's finish_reason.
+                if response.candidates and response.candidates[0].finish_reason.name != "STOP":
+                    reason = response.candidates[0].finish_reason.name
+                    logger.error(f"Gemini generation stopped. Reason: {reason}")
+                    if reason == "MAX_TOKENS":
+                        msg = "The document is too large, causing the output to exceed the model's token limit. Please try with a smaller document."
+                        raise ValueError(msg)
+                    elif reason == "SAFETY":
+                        msg = "The content was blocked by safety settings. Please check the document content."
+                        raise ValueError(msg)
+                    else:
+                        msg = f"Processing failed. Finish reason: {reason}"
+                        raise ValueError(msg)
+                # If there's no specific reason, re-raise the original error.
+                raise
+
+            logger.info(f"Received response from Gemini: {response_text[:500]}...")
+            
+            # Split the response text by the custom separator
+            chunk_contents = response_text.split('<CHUNK_SEPARATOR>')
+            
+            chunks = []
+            for i, content in enumerate(chunk_contents):
+                # Clean up whitespace and ignore empty chunks
+                cleaned_content = content.strip()
+                if cleaned_content:
+                    chunks.append({
+                        "chunk_id": i,
+                        "content": cleaned_content
+                    })
+
+            if not chunks:
+                raise ValueError("No chunks created from response")
+            
+            logger.info(f"Successfully created {len(chunks)} chunks")
+            return chunks
             
         except Exception as e:
             logger.error(f"Error processing file URL: {e}")

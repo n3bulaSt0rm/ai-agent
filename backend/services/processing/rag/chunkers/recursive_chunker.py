@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class ChunkingConfig:
     chunk_size: int = field(default=1800)
     chunk_overlap: int = field(default=200)
-    model_name: str = field(default="AITeamVN/Vietnamese_Embedding")
+    model_name: str = field(default="AITeamVN/Vietnamese_Embedding_v2")
     tokenizer_name: Optional[str] = field(default=None)
     max_sequence_length: int = field(default=2048)
     

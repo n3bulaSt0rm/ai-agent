@@ -51,6 +51,10 @@ from backend.services.processing.rag.extractors.gemini.text_processor import pro
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+# Create log directory for chunk objects
+LOG_DIR = Path(__file__).resolve().parents[3] / "logs" / "chunk_objects"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 # Database path
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "admin.db"
 
@@ -371,6 +375,50 @@ def embed_and_store_chunks(
     
     return len(chunk_objects)
 
+def save_chunk_objects_to_log(chunk_objects: List[ChunkData], file_id: str, document_type: str) -> None:
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filepath = LOG_DIR / f"{document_type}_{file_id}_{timestamp}.json"
+        
+        # Count tokens using model's tokenizer
+        model = modules.embedding_module.dense_model
+        chunks = []
+        total_tokens = 0
+        
+        for chunk in chunk_objects:
+            # Count tokens directly
+            tokens = model.tokenizer.tokenize(chunk.content)
+            token_count = len(tokens)
+            total_tokens += token_count
+            
+            # Add chunk with token count
+            chunks.append({
+                "chunk_id": chunk.chunk_id,
+                "content": chunk.content,
+                "token_count": token_count
+            })
+        
+        # Log token statistics
+        avg_tokens = total_tokens / len(chunks) if chunks else 0
+        logger.info(f"Token stats: Total={total_tokens}, Avg={avg_tokens:.1f}")
+        
+        # Save to file
+        with open(log_filepath, 'w', encoding='utf-8') as f:
+            json.dump(chunks, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Saved {len(chunks)} chunks to log")
+        
+    except Exception as e:
+        logger.error(f"Error saving chunk log: {e}")
+        # Fallback to basic logging without token counts
+        try:
+            simple_chunks = [{"chunk_id": chunk.chunk_id, "content": chunk.content} for chunk in chunk_objects]
+            with open(log_filepath, 'w', encoding='utf-8') as f:
+                json.dump(simple_chunks, f, ensure_ascii=False, indent=2)
+            logger.info(f"Saved {len(simple_chunks)} chunks to log (without token counts)")
+        except Exception as inner_e:
+            logger.error(f"Failed to save even basic log: {inner_e}")
+
 async def process_pdf_document(message_data: Dict[str, Any]) -> None:
     """Process PDF documents using Azure Document Intelligence"""
     file_id = message_data.get("file_id")
@@ -401,6 +449,9 @@ async def process_pdf_document(message_data: Dict[str, Any]) -> None:
         # Step 6: Embed and store chunks
         stored_count = embed_and_store_chunks(chunk_objects, file_id)
         logger.info(f"Successfully stored {stored_count} chunks for PDF document {file_id}")
+        
+        # Save chunk objects to log
+        save_chunk_objects_to_log(chunk_objects, file_id, "pdf")
         
         update_file_status(file_id, FileStatus.PROCESSED)
         logger.info(f"Completed processing PDF document: {file_id}")
@@ -472,6 +523,9 @@ async def process_txt_document(message_data: Dict[str, Any]) -> None:
         # Step 5: Embed and store chunks
         stored_count = embed_and_store_chunks(chunk_objects, file_id)
         logger.info(f"Successfully stored {stored_count} chunks for text document {file_id}")
+        
+        # Save chunk objects to log
+        save_chunk_objects_to_log(chunk_objects, file_id, "txt")
         
         # Update status to processed
         update_file_status(file_id, FileStatus.PROCESSED)
