@@ -12,7 +12,7 @@ import json
 from email.utils import parsedate_to_datetime
 
 from backend.common.config import settings
-from backend.db.metadata import get_metadata_db
+from backend.adapter.metadata import get_metadata_db
 from backend.services.processing.rag.extractors.gemini.gemini_email_processor import GeminiEmailProcessor
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.services.processing.rag.common.qdrant import ChunkData

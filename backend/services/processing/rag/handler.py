@@ -23,7 +23,7 @@ from googleapiclient.errors import HttpError
 from backend.services.processing.rag.retrievers.qdrant_retriever import VietnameseQueryModule, create_query_module
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.common.config import settings
-from backend.db.metadata import get_metadata_db
+from backend.adapter.metadata import get_metadata_db
 
 from backend.services.processing.rag.draft_monitor import EmailDraftMonitor
 

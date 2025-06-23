@@ -12,7 +12,7 @@ import filetype
 from PyPDF2 import PdfReader
 
 from backend.common.config import settings
-from backend.db.metadata import get_metadata_db
+from backend.adapter.metadata import get_metadata_db
 from backend.services.messaging import publish_message
 from backend.utils.s3 import upload_to_s3, upload_to_s3_public, get_signed_url
 from backend.services.web.api.auth import get_admin_user, get_admin_or_manager_user

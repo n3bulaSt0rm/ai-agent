@@ -11,7 +11,7 @@ import json
 
 from backend.common.config import settings
 from backend.services.web.api import auth, files, search, users
-from backend.db.metadata import get_metadata_db
+from backend.adapter.metadata import get_metadata_db
 
 # Configure logging
 logging.basicConfig(

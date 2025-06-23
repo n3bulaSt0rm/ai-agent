@@ -10,7 +10,7 @@ import secrets
 import urllib.parse
 
 from backend.common.config import settings
-from backend.db.metadata import get_metadata_db
+from backend.adapter.metadata import get_metadata_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

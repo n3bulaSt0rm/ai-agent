@@ -8,7 +8,7 @@ import threading
 from datetime import datetime
 
 from backend.common.config import settings
-from backend.db.metadata import get_metadata_db
+from backend.adapter.metadata import get_metadata_db
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.services.processing.rag.utils import (
     calculate_cutoff_date_from_cron, run_cron_scheduler
