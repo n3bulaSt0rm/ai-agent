@@ -4,7 +4,7 @@ import httpx
 import logging
 from typing import Optional
 
-from backend.core.config import settings
+from backend.common.config import settings
 
 router = APIRouter(prefix="/search", tags=["search"])
 

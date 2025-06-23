@@ -34,7 +34,7 @@ if not logging.getLogger().hasHandlers():
 logger = logging.getLogger(__name__)
 
 # Local imports
-from backend.core.config import settings
+from backend.common.config import settings
 from backend.services.messaging import create_subscription, publish_message
 from backend.services.processing.rag.handler import start_gmail_monitoring, GmailHandler
 

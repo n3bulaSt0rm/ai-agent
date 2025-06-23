@@ -32,7 +32,7 @@ class CudaMemoryManager:
         # Batch configuration
         self.max_batch_size = 16
         self.embedding_batch_size = 12
-        self.sequence_length_limit = 512
+        self.sequence_length_limit = 2048
         
         # CUDA optimizations
         self._setup_cuda_optimizations()

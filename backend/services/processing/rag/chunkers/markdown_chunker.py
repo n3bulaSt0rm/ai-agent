@@ -67,9 +67,21 @@ class MarkdownChunker:
         serializable_chunks = []
         for i, chunk in enumerate(header_splits):
             content = chunk.page_content
+
+            heading_context = ""
+            if chunk.metadata:
+                if "heading3" in chunk.metadata:
+                    heading_context = f"### {chunk.metadata['heading3']}\n"
+                elif "heading2" in chunk.metadata:
+                    heading_context = f"## {chunk.metadata['heading2']}\n"
+                elif "heading1" in chunk.metadata:
+                    heading_context = f"# {chunk.metadata['heading1']}\n"
+            
+            final_content = heading_context + content if heading_context else content
+            
             chunk_data = {
                 "chunk_id": i + 1,
-                "content": content,
+                "content": final_content,
                 "metadata": chunk.metadata
             }
             serializable_chunks.append(chunk_data)

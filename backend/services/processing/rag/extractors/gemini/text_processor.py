@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Optional
 
 import google.generativeai as genai
 
-from backend.core.config import settings
+from backend.common.config import settings
 
 # Setup logging
 logger = logging.getLogger(__name__)

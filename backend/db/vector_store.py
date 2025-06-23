@@ -8,7 +8,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from sentence_transformers import SentenceTransformer
-from backend.core.config import settings
+from backend.common.config import settings
 
 # Configure logging
 logger = logging.getLogger(__name__)

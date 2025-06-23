@@ -410,7 +410,7 @@ def save_attachment_to_temp_file(attachment_data: Dict[str, Any]) -> str:
 
 def initialize_embedding_module(collection_name: str):
     """Initialize embedding module for Gmail workers"""
-    from backend.core.config import settings
+    from backend.common.config import settings
     from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
     
     try:

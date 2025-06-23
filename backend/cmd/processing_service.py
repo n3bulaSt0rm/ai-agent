@@ -7,7 +7,7 @@ import uvicorn
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 # Import processing service settings
-from backend.core.config import settings
+from backend.common.config import settings
 
 # Cấu hình logging
 logging.basicConfig(

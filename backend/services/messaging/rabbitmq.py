@@ -6,7 +6,7 @@ import ssl
 import logging
 from typing import Dict, Any, Callable, Optional, List
 from pika.adapters.asyncio_connection import AsyncioConnection
-from backend.core.config import settings
+from backend.common.config import settings
 
 logger = logging.getLogger(__name__)
 

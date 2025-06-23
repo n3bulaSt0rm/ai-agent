@@ -6,7 +6,7 @@ import os
 import json
 import math
 
-from backend.core.config import settings
+from backend.common.config import settings
 from backend.services.processing.rag.common.cuda import CudaMemoryManager
 from backend.services.processing.rag.common.qdrant import QdrantManager
 from backend.services.processing.rag.utils import create_deepseek_client

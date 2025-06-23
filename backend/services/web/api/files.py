@@ -11,7 +11,7 @@ import io
 import filetype
 from PyPDF2 import PdfReader
 
-from backend.core.config import settings
+from backend.common.config import settings
 from backend.db.metadata import get_metadata_db
 from backend.services.messaging import publish_message
 from backend.utils.s3 import upload_to_s3, upload_to_s3_public, get_signed_url

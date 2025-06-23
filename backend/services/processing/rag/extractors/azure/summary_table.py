@@ -30,7 +30,7 @@ project_root = os.path.dirname(src_dir)  # project root
 sys.path.append(project_root)  # Add project root to Python path
 
 # Import from the central config
-from backend.core.config import settings
+from backend.common.config import settings
 
 # Setup logging
 logger = logging.getLogger(__name__)

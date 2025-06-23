@@ -17,7 +17,7 @@ import hmac
 import base64
 import urllib.parse
 
-from backend.core.config import settings
+from backend.common.config import settings
 
 logger = logging.getLogger(__name__)
 

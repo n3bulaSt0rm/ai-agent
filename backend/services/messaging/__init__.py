@@ -7,7 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from backend.core.config import settings
+from backend.common.config import settings
 from backend.services.messaging.rabbitmq import get_rabbitmq_client
 
 async def get_messaging_client():

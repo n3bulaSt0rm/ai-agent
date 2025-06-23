@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Import necessary modules
-from backend.core.config import settings
+from backend.common.config import settings
 from backend.services.processing.rag.common.qdrant import QdrantManager
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 

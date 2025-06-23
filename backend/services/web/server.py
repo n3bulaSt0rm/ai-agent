@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 import json
 
-from backend.core.config import settings
+from backend.common.config import settings
 from backend.services.web.api import auth, files, search, users
 from backend.db.metadata import get_metadata_db
 

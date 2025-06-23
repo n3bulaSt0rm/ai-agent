@@ -3,7 +3,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
-from backend.core.config import settings
+from backend.common.config import settings
 from uuid import uuid4
 
 class MetadataDB:
