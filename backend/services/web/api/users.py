@@ -4,7 +4,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from backend.common.config import settings
-from backend.adapter.metadata import get_metadata_db
+from backend.adapter.sql.metadata import get_metadata_db
 from backend.services.web.api.auth import get_admin_user, get_admin_or_manager_user
 
 router = APIRouter(prefix="/users", tags=["users"])

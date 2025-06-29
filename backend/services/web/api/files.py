@@ -12,9 +12,9 @@ import filetype
 from PyPDF2 import PdfReader
 
 from backend.common.config import settings
-from backend.adapter.metadata import get_metadata_db
-from backend.services.messaging import publish_message
-from backend.utils.s3 import upload_to_s3, upload_to_s3_public, get_signed_url
+from backend.adapter.sql.metadata import get_metadata_db
+from backend.adapter.message_queue.rabbitmq import get_rabbitmq_client
+from backend.adapter.object_storage.s3 import upload_to_s3, upload_to_s3_public, get_signed_url
 from backend.services.web.api.auth import get_admin_user, get_admin_or_manager_user
 
 router = APIRouter(prefix="/files", tags=["files"])
@@ -617,7 +617,8 @@ async def process_file(file_id: int, process_request: Optional[ProcessFileReques
                 "source": file.get("source") if file.get("content_type") == "text/plain" else None
             }
             
-            await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+            client = get_rabbitmq_client()
+            await client.publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
 
         return {
@@ -670,7 +671,8 @@ async def delete_file(file_id: int, current_user: dict = Depends(get_admin_or_ma
                 "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
             }
             
-            await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+            client = get_rabbitmq_client()
+            await client.publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
         return {
             "message": f"File {file_id} is being moved to trash",
@@ -717,7 +719,8 @@ async def restore_file(file_id: int, current_user: dict = Depends(get_admin_or_m
                 "webhook_url": f"{settings.API_BASE_URL}/api/webhook/status-update"
             }
             
-            await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+            client = get_rabbitmq_client()
+            await client.publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
         
         return {
             "message": f"File {file_id} restoration in progress",
@@ -801,7 +804,8 @@ async def update_file(
                         "action": "update_metadata"
                     }
                     
-                    await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+                    client = get_rabbitmq_client()
+                    await client.publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
                     
                     print(f"Message sent to processing service for file {file_id} with updated file_created_at: {file_update.file_created_at}")
 
@@ -847,7 +851,8 @@ async def update_file(
                         "action": "update_keywords"
                     }
                     
-                    await publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
+                    client = get_rabbitmq_client()
+                    await client.publish_message(settings.PDF_PROCESSING_TOPIC, message_data)
                     
                     # Log success
                     print(f"Message sent to processing service for file {file_id} with keywords: {keywords_str}")

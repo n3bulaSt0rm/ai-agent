@@ -9,7 +9,7 @@ import math
 from backend.common.config import settings
 from backend.services.processing.rag.common.cuda import CudaMemoryManager
 from backend.services.processing.rag.common.qdrant import QdrantManager
-from backend.services.processing.rag.utils import create_deepseek_client
+from backend.services.processing.rag.common.utils import create_deepseek_client
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 
 logging.basicConfig(level=logging.INFO)

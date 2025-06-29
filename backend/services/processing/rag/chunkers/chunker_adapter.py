@@ -26,23 +26,11 @@ class UniversalChunkerAdapter:
         chunker_type: Literal["semantic", "recursive"],
         model: str = "AITeamVN/Vietnamese_Embedding_v2",
         threshold: float = 0.3,
-        chunk_size: int = 1800,
-        chunk_overlap: int = 200,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 150,
         min_chunk_length: int = 50,
         max_sequence_length: int = 2048
     ):
-        """
-        Initialize the adapter with specified chunker type and parameters.
-        
-        Args:
-            chunker_type: Type of chunking strategy to use ("semantic" or "recursive")
-            model: Model name to use
-            threshold: Similarity threshold (used only for semantic chunking)
-            chunk_size: Size of chunks (used only for recursive chunking)
-            chunk_overlap: Overlap between chunks (used only for recursive chunking)
-            min_chunk_length: Minimum length of a chunk (used for both)
-            max_sequence_length: Maximum sequence length for tokenization (used for recursive chunking)
-        """
         self.chunker_type = chunker_type
         self.model = model
         self.threshold = threshold
@@ -51,7 +39,7 @@ class UniversalChunkerAdapter:
         self.min_chunk_length = min_chunk_length
         self.max_sequence_length = max_sequence_length
         
-        # Initialize the appropriate chunker
+        #not used
         if chunker_type == "semantic":
             logger.info(f"Initializing semantic chunker with model {model} and threshold {threshold}")
             semantic_config = create_semantic_chunking_config(
@@ -61,13 +49,11 @@ class UniversalChunkerAdapter:
             )
             self.chunker = ProtonxSemanticChunker(semantic_config)
         elif chunker_type == "recursive":
-            logger.info(f"Initializing recursive chunker with model {model}, size {chunk_size}, overlap {chunk_overlap}, max_seq_length {max_sequence_length}")
+            logger.info(f"Initializing recursive chunker with model {model}, size {chunk_size}, overlap {chunk_overlap}")
             recursive_config = create_chunking_config(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
-                model_name=model,
-                min_chunk_length=min_chunk_length,
-                max_sequence_length=max_sequence_length
+                model_name=model
             )
             self.chunker = RecursiveChunker(recursive_config)
         else:

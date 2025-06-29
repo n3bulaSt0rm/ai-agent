@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Local imports
 from backend.common.config import settings
-from backend.services.messaging import create_subscription, publish_message
+from backend.adapter.message_queue.rabbitmq import get_rabbitmq_client
 from backend.services.processing.rag.handler import start_gmail_monitoring, GmailHandler
 
 from backend.services.processing.rag.extractors.azure.main import process_document as azure_process_document
@@ -773,7 +773,8 @@ async def startup():
     try:
         # Create subscription to the processing topic
         logger.info("Creating subscription to processing topic...")
-        await create_subscription(
+        client = get_rabbitmq_client()
+        await client.create_subscription(
             settings.PDF_PROCESSING_TOPIC,
             "processing_service_subscription",
             handle_processing_message

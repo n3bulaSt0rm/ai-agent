@@ -12,11 +12,11 @@ import json
 from email.utils import parsedate_to_datetime
 
 from backend.common.config import settings
-from backend.adapter.metadata import get_metadata_db
+from backend.adapter.sql.metadata import get_metadata_db
 from backend.services.processing.rag.extractors.gemini.gemini_email_processor import GeminiEmailProcessor
 from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 from backend.services.processing.rag.common.qdrant import ChunkData
-from backend.services.processing.rag.utils import (
+from backend.services.processing.rag.common.utils import (
     extract_text_content, extract_all_attachments, 
     run_cron_scheduler
 )
@@ -57,7 +57,7 @@ class GmailIndexingWorker:
                 logger.info("✓ Using shared Gemini Email Processor")
             
             if not self.embedding_module:
-                from backend.services.processing.rag.utils import initialize_embedding_module
+                from backend.services.processing.rag.common.utils import initialize_embedding_module
                 self.embedding_module = initialize_embedding_module(self.collection_name)
                 if not self.embedding_module:
                     return False
