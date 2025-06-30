@@ -636,7 +636,8 @@ Hãy sẵn sàng áp dụng các nguyên tắc và năng lực này để phân 
                 "gemini-2.5-flash",
                 system_instruction=system_instruction,
                 generation_config={
-                    "max_output_tokens": 8192
+                    "max_output_tokens": 8192,
+                    "temperature": 0.3
                 }
             )
             chat = model.start_chat(history=[])
@@ -647,29 +648,7 @@ Hãy sẵn sàng áp dụng các nguyên tắc và năng lực này để phân 
             logger.error(f"Error creating Gemini conversation: {e}")
             return None
 
-    def _extract_json_from_response(self, raw_response: str) -> Optional[Dict[str, Any]]:
-        """
-        Helper function to extract and parse JSON from Gemini response.
-        Handles various formats: plain JSON, markdown code blocks, etc.
-        """
-        # Clean up the response
-        response_text = raw_response.strip()
-        
-        # Extract JSON from code blocks if present
-        if response_text.startswith("```"):
-            # Find first { and last }
-            start_idx = response_text.find("{")
-            end_idx = response_text.rfind("}")
-            if start_idx != -1 and end_idx != -1:
-                response_text = response_text[start_idx:end_idx + 1]
-        
-        # Sanitize control characters
-        response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', response_text)
-        
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            return None
+
 
     async def _extract_questions_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]], existing_summary: Optional[str] = None) -> tuple[List[str], str]:
         """Extract questions and create context summary using Gemini File API."""
@@ -738,17 +717,40 @@ Nội dung: {email['content']}
             full_prompt = [analysis_prompt] + prompt_parts
             
             try:
-                response = conversation.send_message(full_prompt)
+                response = conversation.send_message(
+                    full_prompt,
+                    generation_config={
+                        "max_output_tokens": 8192,
+                        "temperature": 0.3, 
+                        "response_mime_type": "application/json",
+                        "response_schema": {
+                            "type": "object",
+                            "properties": {
+                                "context_summary": {
+                                    "type": "string",
+                                    "description": "Tóm tắt ngắn gọn của cuộc hội thoại và tri thức"
+                                },
+                                "questions": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "description": "Danh sách các câu hỏi được trích xuất"
+                                }
+                            },
+                            "required": ["context_summary", "questions"]
+                        }
+                    }
+                )
                 
-                # Extract and parse JSON using helper function
-                data = self._extract_json_from_response(response.text)
-                
-                if data:
+                # Parse JSON directly
+                try:
+                    data = json.loads(response.text.strip())
                     questions = [q.strip() for q in data.get("questions", []) if q.strip()]
                     context_summary = data.get("context_summary", "")
                     return questions, context_summary
-                else:
-                    logger.error(f"Failed to parse JSON from Gemini response:\n---\n{response.text}\n---")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON from Gemini response: {e}\n---\n{response.text}\n---")
                     return [], f"Thread email với {len(thread_emails)} tin nhắn"
                     
             except Exception as e:
@@ -823,17 +825,8 @@ Phân tích các email mới dưới đây. Trọng tâm của bạn là các c�
 ```
 ---
 
-# ĐỊNH DẠNG ĐẦU RA (JSON)
-**QUAN TRỌNG**: Chỉ trả về một đối tượng JSON hợp lệ. Giá trị của `context_summary` PHẢI là một chuỗi duy nhất KHÔNG chứa dấu xuống dòng, với hai phần tóm tắt được ngăn cách bởi chuỗi định danh đặc biệt '|||'.
-```json
-{{
-  "context_summary": "PHẦN 1 - Tóm tắt cuộc hội thoại đã cập nhật ||| PHẦN 2 - Tóm tắt tri thức đã cập nhật và chi tiết.",
-  "questions": [
-    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ nhất được tạo từ email mới.",
-    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ hai được tạo từ email mới."
-  ]
-}}
-```
+# YÊU CẦU ĐẦU RA
+Trả về hai phần: tóm tắt cuộc hội thoại cập nhật và danh sách các câu hỏi được trích xuất từ email mới.
 
 # QUY TẮC RÀNG BUỘC
 -   Tóm tắt phải khách quan, không suy diễn thông tin không có trong email và file đính kèm.
@@ -889,17 +882,8 @@ Phân tích kỹ lưỡng luồng email dưới đây. Trọng tâm của bạn 
 ```
 ---
 
-# ĐỊNH DẠNG ĐẦU RA (JSON)
-**QUAN TRỌNG**: Chỉ trả về một đối tượng JSON hợp lệ. Giá trị của `context_summary` PHẢI là một chuỗi duy nhất KHÔNG chứa dấu xuống dòng, với hai phần tóm tắt được ngăn cách bởi chuỗi định danh đặc biệt '|||'.
-```json
-{{
-  "context_summary": "PHẦN 1 - Tóm tắt cuộc hội thoại ||| PHẦN 2 - Tóm tắt tri thức chi tiết.",
-  "questions": [
-    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ nhất.",
-    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ hai."
-  ]
-}}
-```
+# YÊU CẦU ĐẦU RA
+Trả về hai phần: tóm tắt cuộc hội thoại và danh sách các câu hỏi được trích xuất.
 
 # QUY TẮC RÀNG BUỘC
 -   Tập trung vào các câu hỏi trong email. File đính kèm dùng để cung cấp thêm chi tiết.
@@ -908,9 +892,17 @@ Phân tích kỹ lưỡng luồng email dưới đây. Trọng tâm của bạn 
 -   Luôn trả về cả 2 phần tóm tắt trong `context_summary`, ngay cả khi một trong hai phần trống.
 """
 
-    async def _ask_gemini(self, conversation: Any, prompt: str) -> str:
+    async def _ask_gemini(self, conversation: Any, prompt: str, temperature: float = 0.3, response_schema: Dict = None) -> str:
         try:
-            response = conversation.send_message(prompt)
+            generation_config = {"temperature": temperature}
+            if response_schema:
+                generation_config["response_mime_type"] = "application/json"
+                generation_config["response_schema"] = response_schema
+            
+            response = conversation.send_message(
+                prompt,
+                generation_config=generation_config
+            )
             return response.text.strip()
         except Exception as e:
             logger.error(f"Error asking Gemini: {e}")
@@ -983,25 +975,21 @@ Trân trọng,
 Phòng Công tác Sinh viên
 
 # YÊU CẦU ĐẦU RA
-**CHỈ TRẢ VỀ NỘI DUNG EMAIL PHẢN HỒI HOÀN CHỈNH.**
+Trả về nội dung email phản hồi hoàn chỉnh dạng plain text.
 """
             
-            final_response = "Có lỗi xảy ra khi tạo phản hồi."
-            if conversation:
-                try:
-                    final_response = await self._ask_gemini(conversation, email_prompt)
-                except Exception as e:
-                    logger.error(f"Error in conversation-based response generation: {e}")
-                    final_response = "Xin lỗi, có lỗi xảy ra trong quá trình tạo phản hồi. Vui lòng thử lại sau."
-            else:
+            if not conversation:
                 logger.error("No conversation context available for response generation")
-                final_response = "Không có context cuộc hội thoại để tạo phản hồi."
-            
-            return final_response
-            
+                raise Exception("No conversation context available for response generation")
+            try:
+                final_response = await self._ask_gemini(conversation, email_prompt, temperature=0.3)
+                return final_response
+            except Exception as e:
+                logger.error(f"Error in conversation-based response generation: {e}")
+                raise Exception(f"Error in conversation-based response generation: {e}")
         except Exception as e:
             logger.error(f"Error generating email response with Gemini: {e}")
-            return f"Xin lỗi, có lỗi xảy ra khi tạo email phản hồi. Vui lòng liên hệ trực tiếp để được hỗ trợ.\\n\\nTrân trọng,\\n{settings.GMAIL_EMAIL_ADDRESS or 'Phòng Công tác Sinh viên'}"
+            raise
 
     async def create_draft_email(self, to: str, subject: str, body: str, thread_id: str = None) -> str:
         """
@@ -1238,9 +1226,10 @@ Viết câu trả lời cuối cùng ngay dưới đây.
 Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng trong hệ thống RAG.
 
 **NHIỆM VỤ:**
-Bạn sẽ thực hiện một quy trình 2 bước:
+Bạn sẽ thực hiện một quy trình 3 bước:
 1.  **Bước 1: Đánh giá (Critique):** Đọc kỹ câu hỏi và văn bản. Quyết định xem văn bản này có chứa câu trả lời trực tiếp hoặc thông tin cực kỳ liên quan đến câu hỏi hay không.
 2.  **Bước 2: Trích xuất (Extract):** Nếu và chỉ nếu văn bản được đánh giá là có liên quan, hãy trích xuất nguyên văn những câu hoặc cụm câu trả lời cho câu hỏi đó thành một **đoạn trích cốt lõi**.
+3.  **Bước 3: Validate JSON:** Kiểm tra và đảm bảo output của bạn là một JSON hợp lệ. Đặc biệt chú ý escape các ký tự đặc biệt như backslash (\), dấu ngoặc kép ("), xuống dòng (\n) trong nội dung text.
 
 **CÂU HỎI GỐC:**
 ---
@@ -1253,7 +1242,7 @@ Bạn sẽ thực hiện một quy trình 2 bước:
 ---
 
 **ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC):**
-Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau:
+Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau. Đảm bảo escape đúng tất cả ký tự đặc biệt:
 ```json
 {{
   "is_relevant": <true nếu văn bản có liên quan, ngược lại false>,
@@ -1271,30 +1260,14 @@ Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau:
                 max_tokens=4000,
                 error_default='{"is_relevant": false, "relevant_content": ""}'
             )
-            
-            # Clean and parse JSON with better error handling
+                    
             response_text = response_text.strip()
-            
-            # Remove markdown code blocks if present
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
-            elif response_text.startswith("```"):
-                response_text = response_text[3:]
             if response_text.endswith("```"):
                 response_text = response_text[:-3]
             
-            response_text = response_text.strip()
-            
-            # Try to find JSON object boundaries
-            start_idx = response_text.find("{")
-            end_idx = response_text.rfind("}")
-            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
-                response_text = response_text[start_idx:end_idx + 1]
-            
-            # Clean control characters that might cause JSON parsing issues
-            response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', response_text)
-            
-            return json.loads(response_text)
+            return json.loads(response_text.strip())
             
         except (json.JSONDecodeError, Exception) as e:
             logger.error(f"Error during C-RAG evaluation for query '{query}': {e}")
