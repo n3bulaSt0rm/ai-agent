@@ -190,7 +190,7 @@ class GmailHandler:
                     logger.debug("Using shared CUDA Memory Manager from server")
                 if hasattr(modules, 'embedding_module') and modules.embedding_module:
                     embedding_module = modules.embedding_module
-                    logger.debug("Using shared Embedding Module from server")
+                    logger.debug(f"Using shared Embedding Module from server - will use collection switching for {settings.EMAIL_QA_COLLECTION}")
             except (ImportError, AttributeError) as e:
                 logger.warning(f"Could not import modules from server: {e}")
             
@@ -329,6 +329,7 @@ class GmailHandler:
             return []
             
     async def _process_thread(self, thread_id: str, thread_messages: List[Dict]) -> Optional[Dict[str, Any]]:
+        uploaded_files_to_clean = []
         try:
             logger.debug(f"Processing thread {thread_id} with {len(thread_messages)} messages")
             
@@ -363,7 +364,7 @@ class GmailHandler:
                 logger.error(f"Failed to create Gemini conversation for thread {thread_id}")
                 return None
             
-            questions, context_summary = await self._extract_questions_with_gemini(
+            questions, context_summary, uploaded_files_to_clean = await self._extract_questions_with_gemini(
                 conversation, 
                 all_thread_emails, 
                 existing_summary=existing_summary
@@ -511,6 +512,16 @@ class GmailHandler:
         except Exception as e:
             logger.error(f"Error in _process_thread for thread {thread_id}: {e}")
             return None
+        finally:
+            # Cleanup files
+            if uploaded_files_to_clean:
+                logger.debug(f"Cleaning up {len(uploaded_files_to_clean)} uploaded files for thread {thread_id}")
+                for uploaded_file, temp_path in uploaded_files_to_clean:
+                    try:
+                        genai.delete_file(uploaded_file.name)
+                        os.unlink(temp_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up file {uploaded_file.name if uploaded_file else 'N/A'} or temp path {temp_path}: {e}")
 
     
     def mark_as_read(self, message_id: str) -> None:
@@ -650,7 +661,7 @@ Hãy sẵn sàng áp dụng các nguyên tắc và năng lực này để phân 
 
 
 
-    async def _extract_questions_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]], existing_summary: Optional[str] = None) -> tuple[List[str], str]:
+    async def _extract_questions_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]], existing_summary: Optional[str] = None) -> tuple[List[str], str, List[Tuple[Any, str]]]:
         """Extract questions and create context summary using Gemini File API."""
         try:
             prompt_parts = []
@@ -748,27 +759,18 @@ Nội dung: {email['content']}
                     data = json.loads(response.text.strip())
                     questions = [q.strip() for q in data.get("questions", []) if q.strip()]
                     context_summary = data.get("context_summary", "")
-                    return questions, context_summary
+                    return questions, context_summary, uploaded_files
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse JSON from Gemini response: {e}\n---\n{response.text}\n---")
-                    return [], f"Thread email với {len(thread_emails)} tin nhắn"
+                    return [], f"Thread email với {len(thread_emails)} tin nhắn", uploaded_files
                     
             except Exception as e:
                 logger.error(f"Error sending message to Gemini: {e}")
-                return [], f"Thread email với {len(thread_emails)} tin nhắn"
+                return [], f"Thread email với {len(thread_emails)} tin nhắn", uploaded_files
                     
-            finally:
-                # Cleanup files
-                for uploaded_file, temp_path in uploaded_files:
-                    try:
-                        genai.delete_file(uploaded_file.name)
-                        os.unlink(temp_path)
-                    except:
-                        pass
-            
         except Exception as e:
             logger.error(f"Error extracting questions with Gemini: {e}")
-            return [], "Lỗi phân tích thread email"
+            return [], "Lỗi phân tích thread email", uploaded_files
     
     def _create_update_summary_prompt(self, thread_content: str, existing_summary: str) -> str:
         """Creates a prompt to update a summary and extract questions from new emails in a thread."""
@@ -1156,7 +1158,7 @@ Trả về nội dung email phản hồi hoàn chỉnh dạng plain text.
 Bạn là một trợ lý AI chuyên gia, có nhiệm vụ tổng hợp thông tin từ các đoạn trích đã được chắt lọc và soạn một câu trả lời cuối cùng, mạch lạc, đầy đủ cho người dùng.
 
 **BỐI CẢNH:**
-Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm kiếm và sau đó chắt lọc để lấy ra những **đoạn trích cốt lõi** liên quan nhất dưới đây.
+Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm kiếm và sau đó chắt lọc để lấy ra những **đoạn trích cốt lõi** liên quan nhất dưới đây. Các đoạn trích có thể có thông tin nguồn `[Nguồn: ...]` và ngày cập nhật `(Cập nhật: ...)`.
 
 **YÊU CẦU GỐC CỦA NGƯỜI DÙNG:**
 ---
@@ -1169,19 +1171,30 @@ Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm
 ---
 
 **NHIỆM VỤ:**
-Dựa trên **YÊU CẦU GỐC** và các **ĐOẠN TRÍCH CỐT LÕI**, hãy thực hiện các bước sau:
-1.  **Tổng hợp (Synthesize):** Đọc và hiểu tất cả các đoạn trích cốt lõi. Hãy kết hợp các thông tin trên thành một bài tổng hợp có logic và liền mạch.
-2.  **Lọc và Ưu tiên (Filter & Prioritize):** Nếu có thông tin mâu thuẫn, hãy ưu tiên thông tin có ngày cập nhật mới nhất.
-3.  **Soạn thảo (Draft):** Viết một câu trả lời hoàn chỉnh, duy nhất.
+Dựa trên **YÊU CẦU GỐC** và các **ĐOẠN TRÍCH CỐT LÕI**, hãy soạn một câu trả lời hoàn chỉnh, duy nhất.
 
-**QUY TẮC SOẠN THẢO (BẮT BUỘC):**
-*   **Định dạng:** Chỉ sử dụng văn bản thuần (plain text). KHÔNG DÙNG MARKDOWN.
-*   **Cấu trúc:** Mở đầu ngắn gọn, đi thẳng vào nội dung chính, trả lời lần lượt từng ý trong yêu cầu của người dùng, và kết luận.
-*   **Trích dẫn ngày:** Khi sử dụng thông tin có ngày cập nhật, PHẢI ghi rõ trong câu trả lời (ví dụ: "Theo quy định cập nhật ngày 15/03/2024,...").
-*   **Trích dẫn nguồn:** Nếu thông tin có nguồn, hãy đánh số footnote trong câu trả lời (ví dụ: `...nội dung [1].`) và liệt kê danh sách nguồn ở cuối cùng dưới tiêu đề `NGUỒN THAM KHẢO:`. Nếu không có thông tin nào được trích xuất từ nguồn tham khảo, **TUYỆT ĐỐI KHÔNG** hiển thị mục "NGUỒN THAM KHẢO".
-*   **Trung thực:** Nếu sau khi chắt lọc vẫn không có thông tin cho một ý nào đó, hãy nói rõ "Hiện tại hệ thống không tìm thấy thông tin chi tiết về...".
+**QUY TẮC SOẠN THẢO (TUÂN THỦ TUYỆT ĐỐI):**
 
-Viết câu trả lời cuối cùng ngay dưới đây.
+1.  **Ưu tiên thông tin mới nhất (CỰC KỲ QUAN TRỌNG):**
+    -   Nếu nhiều đoạn trích nói về cùng một chủ đề, bạn **BẮT BUỘC CHỈ SỬ DỤNG** thông tin từ đoạn trích có ngày cập nhật **MỚI NHẤT**.
+    -   **TUYỆT ĐỐI KHÔNG** sử dụng hay trích dẫn thông tin từ các nguồn cũ hơn nếu nguồn mới nhất đã đủ để trả lời. Ví dụ: nếu có thông tin từ năm 2025 và 2023, chỉ dùng thông tin năm 2025.
+
+2.  **Định dạng đầu ra (BẮT BUỘC):**
+    -   Toàn bộ câu trả lời phải là **văn bản thuần (plain text)**.
+    -   **KHÔNG ĐƯỢC PHÉP** sử dụng bất kỳ định dạng Markdown nào (ví dụ: không dùng `**` để in đậm, không dùng `*` hay `-` hay số để tạo danh sách). Viết thành các đoạn văn bình thường.
+
+3.  **Trích dẫn nguồn:**
+    -   Khi sử dụng thông tin từ một đoạn trích, hãy đặt footnote dạng số (ví dụ: `...nội dung [1].`).
+    -   Tạo một mục `NGUỒN THAM KHẢO:` ở cuối câu trả lời.
+    -   Trong mục này, liệt kê tất cả các nguồn đã được trích dẫn. Mỗi nguồn phải bao gồm **toàn bộ link/tên nguồn** được cung cấp trong phần `[Nguồn: ...]` của đoạn trích.
+
+4.  **Cấu trúc và giọng văn:**
+    -   Mở đầu ngắn gọn, đi thẳng vào vấn đề.
+    -   Tổng hợp thông tin một cách mạch lạc để trả lời yêu cầu của người dùng.
+    -   Giọng văn chuyên nghiệp, rõ ràng.
+    -   Nếu không có thông tin để trả lời phần nào đó, hãy trung thực nêu rõ: "Hiện tại hệ thống chưa có thông tin chi tiết về...".
+
+Viết câu trả lời cuối cùng ngay dưới đây, tuân thủ nghiêm ngặt tất cả các quy tắc trên.
 </instructions>
 """
 
@@ -1223,13 +1236,17 @@ Viết câu trả lời cuối cùng ngay dưới đây.
             user_message = f"""
 <instructions>
 **VAI TRÒ:**
-Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng trong hệ thống RAG.
+Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng cao trong hệ thống RAG.
 
 **NHIỆM VỤ:**
-Bạn sẽ thực hiện một quy trình 3 bước:
-1.  **Bước 1: Đánh giá (Critique):** Đọc kỹ câu hỏi và văn bản. Quyết định xem văn bản này có chứa câu trả lời trực tiếp hoặc thông tin cực kỳ liên quan đến câu hỏi hay không.
-2.  **Bước 2: Trích xuất (Extract):** Nếu và chỉ nếu văn bản được đánh giá là có liên quan, hãy trích xuất nguyên văn những câu hoặc cụm câu trả lời cho câu hỏi đó thành một **đoạn trích cốt lõi**.
-3.  **Bước 3: Validate JSON:** Kiểm tra và đảm bảo output của bạn là một JSON hợp lệ. Đặc biệt chú ý escape các ký tự đặc biệt như backslash (\), dấu ngoặc kép ("), xuống dòng (\n) trong nội dung text.
+Bạn sẽ nhận được một **CÂU HỎI GỐC** và một **VĂN BẢN**. Nhiệm vụ của bạn là đánh giá mức độ liên quan của văn bản và trích xuất thông tin hữu ích nhất từ đó.
+
+**QUY TRÌNH THỰC HIỆN:**
+1.  **Đánh giá mức độ liên quan:** Đọc kỹ câu hỏi và văn bản. Quyết định xem văn bản này có chứa thông tin hữu ích để trả lời câu hỏi không. Thông tin không nhất thiết phải là câu trả lời trực tiếp, mà có thể là thông tin nền, giải thích, hoặc các chi tiết liên quan giúp làm sáng tỏ câu hỏi.
+2.  **Trích xuất thông tin:**
+    *   **Nếu văn bản có liên quan:** Hãy trích xuất một **đoạn trích cốt lõi**. Đoạn trích này nên mạch lạc, đầy đủ và chứa tất cả thông tin trong văn bản giúp trả lời câu hỏi một cách toàn diện. Thay vì chỉ lấy một câu trả lời ngắn gọn, hãy bao gồm cả ngữ cảnh xung quanh để người đọc hiểu rõ vấn đề. Đoạn trích phải được giữ nguyên văn từ văn bản gốc.
+    *   **Nếu văn bản không liên quan:** Trả về một chuỗi rỗng cho nội dung trích xuất.
+3.  **Định dạng đầu ra:** Trả về kết quả dưới dạng một đối tượng JSON duy nhất.
 
 **CÂU HỎI GỐC:**
 ---

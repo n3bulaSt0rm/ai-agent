@@ -29,24 +29,27 @@ class GmailCleanupWorker:
         self.is_scheduled = False
         self.worker_thread = None
         
-        logger.info(f"Gmail Cleanup Worker initialized - Cron: {self.outdated_cron_expression}")
+        logger.info(f"Cleanup Worker initialized - Cron: {self.outdated_cron_expression}")
     
-    def _initialize_components(self):
-        if self.embedding_module:
-            logger.info("✓ Using shared Embedding Module")
-            return True
-        
-        from backend.services.processing.rag.common.utils import initialize_embedding_module
-        self.embedding_module = initialize_embedding_module(self.collection_name)
-        if self.embedding_module:
-            logger.info("✓ Embedding Module initialized")
-            return True
-        else:
-            logger.error("Failed to initialize Embedding Module")
-            return False
+
     
     def _calculate_cutoff_date(self) -> str:
         return calculate_cutoff_date_from_cron(self.outdated_cron_expression)
+    
+    def _delete_chunks_with_collection_switch(self, embedding_id: str) -> bool:
+        try:
+            original_collection = self.embedding_module.qdrant_manager.collection_name
+            try:
+                self.embedding_module.qdrant_manager.collection_name = settings.EMAIL_QA_COLLECTION
+                return self.embedding_module.qdrant_manager.delete_chunks_by_embedding_id(embedding_id)
+            except Exception as e:
+                logger.error(f"Error deleting chunks for embedding_id {embedding_id}: {e}")
+                return False
+            finally:
+                self.embedding_module.qdrant_manager.collection_name = original_collection
+        except Exception as e:
+            logger.error(f"Error in collection switching for embedding_id {embedding_id}: {e}")
+            return False
     
     def _process_cleanup(self, cutoff_date: str) -> tuple[int, int]:
         try:
@@ -69,11 +72,8 @@ class GmailCleanupWorker:
                     continue
                 
                 try:
-                    if self.embedding_module.qdrant_manager.delete_chunks_by_embedding_id(embedding_id):
+                    if self._delete_chunks_with_collection_switch(embedding_id):
                         cleaned_count += 1
-                        logger.debug(f"Successfully cleaned chunks for embedding_id: {embedding_id}")
-                    else:
-                        logger.warning(f"Failed to clean chunks for embedding_id: {embedding_id}")
                 except Exception as e:
                     logger.error(f"Error cleaning chunks for embedding_id {embedding_id}: {e}")
             
@@ -92,8 +92,13 @@ class GmailCleanupWorker:
         
         self.is_running = True
         try:
-            if not self._initialize_components():
-                return
+            # Initialize embedding module if needed
+            if not self.embedding_module:
+                from backend.services.processing.rag.common.utils import initialize_embedding_module
+                self.embedding_module = initialize_embedding_module(settings.EMAIL_QA_COLLECTION)
+                if not self.embedding_module:
+                    logger.error("Failed to initialize embedding module")
+                    return
             
             cutoff_date = self._calculate_cutoff_date()
             marked_count, cleaned_count = self._process_cleanup(cutoff_date)
@@ -121,12 +126,12 @@ class GmailCleanupWorker:
         self.is_scheduled = True
         self.worker_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
         self.worker_thread.start()
-        logger.info("Gmail cleanup worker started")
+        logger.info("Cleanup worker started")
     
     def stop(self):
         self.is_running = False
         self.is_scheduled = False
-        logger.info("Gmail cleanup worker stopped")
+        logger.info("Cleanup worker stopped")
     
     def run_once(self):
         self._run_cleanup() 

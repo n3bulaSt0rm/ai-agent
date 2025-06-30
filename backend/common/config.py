@@ -76,8 +76,8 @@ class Settings(BaseSettings):
     SPARSE_MODEL_NAME: str = Field(default="Qdrant/bm25", description="Sparse embedding model name")
     RERANKER_MODEL_NAME: str = Field(default="AITeamVN/Vietnamese_Reranker", description="Reranker model name")
     VECTOR_SIZE: int = Field(default=1024, description="Size of vector embeddings")
-    RECURSIVE_CHUNKER_SIZE: int = Field(default=1800)
-    RECURSIVE_CHUNKER_OVERLAP: int = Field(default=220)
+    RECURSIVE_CHUNKER_SIZE: int = Field(default=1000)
+    RECURSIVE_CHUNKER_OVERLAP: int = Field(default=150)
     RECURSIVE_CHUNKER_MIN_LENGTH: int = Field(default=50)       
     RECURSIVE_CHUNKER_MAX_SEQ_LENGTH: int = Field(default=2048)
     QDRANT_BATCH_SIZE: int = Field(default=8)
@@ -99,10 +99,10 @@ class Settings(BaseSettings):
     MONITORING_SLEEP_INTERVAL: int = Field(default=60, description="Monitoring loop sleep interval in seconds (1 minute)")
     
     # Background Worker settings for Gmail Thread Processing
-    WORKER_CRON_EXPRESSION: str = Field(default="0 4 * * *", description="Cron expression for worker schedule (default: 4 AM every day)")
-    EMAIL_QA_COLLECTION: str = Field(default="email_qa", description="Qdrant collection name for email embeddings")
-    CLEANUP_CRON_EXPRESSION: str = Field(default="0 2 1 * *", description="Cron expression for cleanup schedule (default: 2 AM on 1st day of every month)")
-    OUTDATED_CLEANUP_CRON_EXPRESSION: str = Field(default="0 1 1 */3 *", description="Cron expression for outdated threads cleanup (default: 1 AM on 1st day every 3 months)")
+    WORKER_CRON_EXPRESSION: str = Field(default="*/3 * * * *", description="Cron expression for worker schedule (default: every 3 minutes for testing)")
+    # NOTE: For production, change back to "0 4 * * *" (4 AM daily) or appropriate schedule
+    EMAIL_QA_COLLECTION: str = Field(default="qa_emails", description="Qdrant collection name for email embeddings")
+    OUTDATED_CLEANUP_CRON_EXPRESSION: str = Field(default="*/5 * * * *", description="Cron expression for outdated threads cleanup (default: every 5 minutes for testing)")
     
     # Logging settings
     LOG_LEVEL: str = Field(default="INFO")

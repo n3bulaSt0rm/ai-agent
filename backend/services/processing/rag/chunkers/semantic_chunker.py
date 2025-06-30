@@ -113,10 +113,18 @@ class ProtonxSemanticChunker:
         refined_chunks = []
         global_chunk_id = 1
         
-        for parent_chunk in chunks:
-            content = parent_chunk.get('content', '')
-            metadata = parent_chunk.get('metadata', {})
-            parent_chunk_id = parent_chunk.get('chunk_id', 0)
+        for parent_idx, parent_chunk in enumerate(chunks):
+            # Handle both dictionary and langchain Document objects
+            if hasattr(parent_chunk, 'page_content'):
+                # This is a langchain Document object
+                content = parent_chunk.page_content or ''
+                metadata = getattr(parent_chunk, 'metadata', {})
+                parent_chunk_id = parent_idx + 1  # Use 1-based index for langchain Documents
+            else:
+                # This is a dictionary
+                content = parent_chunk.get('content', '')
+                metadata = parent_chunk.get('metadata', {})
+                parent_chunk_id = parent_chunk.get('chunk_id', 0)
             
             # Skip empty content
             if not content.strip():

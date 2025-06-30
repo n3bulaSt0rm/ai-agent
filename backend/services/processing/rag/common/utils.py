@@ -6,12 +6,19 @@ import logging
 import time
 import base64
 import asyncio
+import re
+import threading
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
 
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.exceptions import LangChainException
+from croniter import croniter
+
+from backend.common.config import settings
+from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +286,6 @@ def extract_text_content(payload: Dict) -> str:
             if data:
                 html_content = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
                 # Convert HTML to plain text (basic implementation)
-                import re
                 text = re.sub('<[^<]+?>', '', html_content)
                 text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
                 body_text += text + "\n"
@@ -301,9 +307,6 @@ def extract_text_content(payload: Dict) -> str:
 
 def initialize_embedding_module(collection_name: str):
     """Initialize embedding module for Gmail workers"""
-    from backend.common.config import settings
-    from backend.services.processing.rag.embedders.text_embedder import VietnameseEmbeddingModule
-    
     try:
         return VietnameseEmbeddingModule(
             qdrant_host=settings.QDRANT_HOST,
@@ -320,9 +323,6 @@ def initialize_embedding_module(collection_name: str):
 
 def calculate_cutoff_date_from_cron(cron_expression: str) -> str:
     """Calculate cutoff date from cron expression"""
-    from datetime import datetime, timedelta
-    from croniter import croniter
-    
     try:
         now = datetime.now()
         cron = croniter(cron_expression, now)
@@ -335,44 +335,65 @@ def calculate_cutoff_date_from_cron(cron_expression: str) -> str:
         logger.warning(f"Using fallback cutoff: {fallback_date}")
         return fallback_date
 
-# Removed KNOWLEDGE_SUMMARY_SEPARATOR - now using "|||" directly
 
 def run_cron_scheduler(cron_expression: str, worker_func, worker_name: str, is_scheduled_attr=None):
     """Generic cron scheduler for workers"""
-    from datetime import datetime
-    from croniter import croniter
-    import time
-    
     try:
         cron = croniter(cron_expression, datetime.now())
         logger.info(f"{worker_name} scheduled with cron: {cron_expression}")
         
-        # Access the actual worker object and its is_scheduled attribute
-        worker_obj = worker_func.__self__
+        worker_obj = None
+        try:
+            worker_obj = worker_func.__self__
+        except AttributeError:
+            pass
         
-        while getattr(worker_obj, 'is_scheduled', False):
+        def should_continue():
+            if worker_obj is not None:
+                return getattr(worker_obj, 'is_scheduled', True)
+            return True
+        
+        while should_continue():
             try:
-                next_run = cron.get_next(datetime)
                 now = datetime.now()
+                next_run = cron.get_next(datetime)
+                sleep_time = (next_run - now).total_seconds()
                 
+                if sleep_time > 0:
+                    while sleep_time > 0 and should_continue():
+                        chunk_sleep = min(10, sleep_time)
+                        time.sleep(chunk_sleep)
+                        sleep_time -= chunk_sleep
+                        
+                        now = datetime.now()
+                        if now >= next_run:
+                            break
+                
+                if not should_continue():
+                    break
+                
+                now = datetime.now()
                 if now >= next_run:
-                    logger.info(f"Running {worker_name} at {now}")
+                    logger.info(f"Running {worker_name} at {now.strftime('%H:%M:%S')}")
                     try:
                         worker_func()
+                        logger.info(f"Completed {worker_name} execution")
                     except Exception as e:
                         logger.error(f"Error in {worker_name} execution: {e}")
                     
-                    # Reset cron iterator to get next scheduled time
                     cron = croniter(cron_expression, datetime.now())
-                    next_run = cron.get_next(datetime)
-                
-                # Calculate sleep time until next run (max 60 seconds)
-                sleep_time = min(60, max(1, (next_run - datetime.now()).total_seconds()))
-                time.sleep(sleep_time)
                 
             except Exception as e:
                 logger.error(f"Error in {worker_name} scheduler loop: {e}")
-                time.sleep(60)  # Fallback sleep on error
+                time.sleep(10)
+                
+            if worker_obj is None:
+                try:
+                    current_thread = threading.current_thread()
+                    if current_thread.daemon:
+                        pass
+                except:
+                    pass
         
         logger.info(f"{worker_name} scheduler stopped")
         

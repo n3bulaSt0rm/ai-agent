@@ -93,9 +93,33 @@ class RecursiveChunker:
         refined_chunks = []
         global_chunk_id = 1
         
-        for parent_chunk in chunks:
-            content = parent_chunk.get('content', '')
-            parent_chunk_id = parent_chunk.get('chunk_id', 0)
+        # DEBUG: Log detailed info about input chunks
+        logger.info(f"RecursiveChunker processing {len(chunks)} chunks for file {file_id}")
+        for i, chunk in enumerate(chunks):
+            logger.info(f"  Chunk {i}: type={type(chunk)}, has_get={hasattr(chunk, 'get')}, has_page_content={hasattr(chunk, 'page_content')}")
+            if hasattr(chunk, 'page_content'):
+                logger.info(f"    - page_content length: {len(chunk.page_content) if chunk.page_content else 0}")
+                logger.info(f"    - metadata: {chunk.metadata}")
+            else:
+                logger.info(f"    - str representation: {str(chunk)[:200]}...")
+        
+        for parent_idx, parent_chunk in enumerate(chunks):
+            try:
+                # Handle both dictionary and langchain Document objects
+                if hasattr(parent_chunk, 'page_content'):
+                    # This is a langchain Document object
+                    content = parent_chunk.page_content or ''
+                    parent_chunk_id = parent_idx + 1  # Use 1-based index for langchain Documents
+                else:
+                    # This is a dictionary
+                    content = parent_chunk.get('content', '')
+                    parent_chunk_id = parent_chunk.get('chunk_id', 0)
+            except AttributeError as e:
+                logger.error(f"ERROR accessing chunk attributes: {e}")
+                logger.error(f"Chunk type: {type(parent_chunk)}")
+                logger.error(f"Chunk attributes: {dir(parent_chunk) if hasattr(parent_chunk, '__dict__') else 'N/A'}")
+                logger.error(f"Chunk str: {str(parent_chunk)[:500]}")
+                raise
             
             if not content.strip():
                 continue

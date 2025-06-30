@@ -93,7 +93,7 @@ def delete_points_by_file_id(file_id: str):
 
 if __name__ == "__main__":
     # Get file_id from command line or use default
-    file_id = sys.argv[1] if len(sys.argv) > 1 else "1fd3172b-7d20-44d0-b1ef-b109834179c7"
+    file_id = sys.argv[1] if len(sys.argv) > 1 else "197c20e13e71011d,197c21d6b8c96c0f"
     
     logger.info(f"Starting deletion of points with file_id: {file_id}")
     delete_points_by_file_id(file_id)
