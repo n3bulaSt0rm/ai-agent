@@ -183,7 +183,7 @@ Chỉ trả về MỘT chuỗi văn bản duy nhất. Các chunk được phân 
 """
             
             logger.info("Generating chunks with Gemini")
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
 
             generation_config = {
                 "temperature": 0.2,

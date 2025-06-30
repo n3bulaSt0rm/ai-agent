@@ -154,52 +154,37 @@ def create_deepseek_client(deepseek_api_key: str, deepseek_api_url: str = None,
         model=deepseek_model
     )
 
-def extract_image_attachments(gmail_service, user_id: str, payload: Dict, message_id: str) -> List[Dict[str, Any]]:
-    """
-    Extract image attachments from email payload - shared utility for handler and worker
-    
-    Args:
-        gmail_service: Gmail API service object
-        user_id: Gmail user ID
-        payload: Email payload from Gmail API
-        message_id: Gmail message ID for downloading external attachments
-        
-    Returns:
-        List of image attachment data
-    """
+def extract_all_attachments(gmail_service, user_id: str, payload: Dict, message_id: str) -> List[Dict[str, Any]]:
+    """Extract all attachments (images and PDFs) from email payload - simplified iterative version"""
     attachments = []
     
-    def process_part(part):
-        """Recursively process email parts to find images"""
+    # Use queue to process parts iteratively instead of recursion
+    parts_to_process = []
+    
+    # Initialize queue
+    if 'parts' in payload:
+        parts_to_process.extend(payload['parts'])
+    else:
+        parts_to_process.append(payload)
+    
+    # Process all parts iteratively
+    while parts_to_process:
+        part = parts_to_process.pop(0)
         mime_type = part.get('mimeType', '')
-        filename = part.get('filename', '')
         
-        logger.debug(f"Processing part: mimeType={mime_type}, filename={filename}")
-        
-        # Check if this part is an image
-        if mime_type.startswith('image/'):
-            logger.info(f"Found image part: {mime_type}, {filename}")
+        # Check if this part is an attachment we want
+        if mime_type.startswith('image/') or mime_type == 'application/pdf':
             attachment_data = get_attachment_data(gmail_service, user_id, part, message_id)
             if attachment_data:
+                # Add attachment type
+                attachment_data['attachment_type'] = 'image' if mime_type.startswith('image/') else 'pdf'
+                attachment_data['message_id'] = message_id
                 attachments.append(attachment_data)
-                logger.info(f"Successfully extracted image: {attachment_data['filename']} ({attachment_data['size']} bytes)")
-            else:
-                logger.warning(f"Failed to extract image data for: {filename}")
         
-        # Process nested parts
+        # Add nested parts to queue for processing
         if 'parts' in part:
-            for subpart in part['parts']:
-                process_part(subpart)
+            parts_to_process.extend(part['parts'])
     
-    # Start processing from the main payload
-    if 'parts' in payload:
-        for part in payload['parts']:
-            process_part(part)
-    else:
-        # Single part email
-        process_part(payload)
-    
-    logger.info(f"Found {len(attachments)} image attachments")
     return attachments
 
 def get_attachment_data(gmail_service, user_id: str, part: Dict, message_id: str) -> Optional[Dict[str, Any]]:
@@ -314,100 +299,6 @@ def extract_text_content(payload: Dict) -> str:
     
     return body_text.strip()
 
-def extract_all_attachments(gmail_service, user_id: str, payload: Dict, message_id: str) -> List[Dict[str, Any]]:
-    """
-    Extract all attachments (images and PDFs) from email payload - shared utility for handler and worker
-    
-    Args:
-        gmail_service: Gmail API service object
-        user_id: Gmail user ID
-        payload: Email payload from Gmail API
-        message_id: Gmail message ID for downloading external attachments
-        
-    Returns:
-        List of attachment data with type indicators
-    """
-    attachments = []
-    
-    def process_part(part):
-        """Recursively process email parts to find attachments"""
-        mime_type = part.get('mimeType', '')
-        filename = part.get('filename', '')
-        
-        logger.debug(f"Processing part: mimeType={mime_type}, filename={filename}")
-        
-        # Check if this part is an image or PDF
-        if mime_type.startswith('image/') or mime_type == 'application/pdf':
-            logger.info(f"Found attachment part: {mime_type}, {filename}")
-            attachment_data = get_attachment_data(gmail_service, user_id, part, message_id)
-            if attachment_data:
-                # Add attachment type for easier processing
-                if mime_type.startswith('image/'):
-                    attachment_data['attachment_type'] = 'image'
-                elif mime_type == 'application/pdf':
-                    attachment_data['attachment_type'] = 'pdf'
-                
-                attachments.append(attachment_data)
-                logger.info(f"Successfully extracted {attachment_data['attachment_type']}: {attachment_data['filename']} ({attachment_data['size']} bytes)")
-            else:
-                logger.warning(f"Failed to extract attachment data for: {filename}")
-        
-        # Process nested parts
-        if 'parts' in part:
-            for subpart in part['parts']:
-                process_part(subpart)
-    
-    # Start processing from the main payload
-    if 'parts' in payload:
-        for part in payload['parts']:
-            process_part(part)
-    else:
-        # Single part email
-        process_part(payload)
-    
-    logger.info(f"Found {len(attachments)} attachments (images and PDFs)")
-    return attachments
-
-def save_attachment_to_temp_file(attachment_data: Dict[str, Any]) -> str:
-    """
-    Save attachment data to a temporary file and return the file path
-    
-    Args:
-        attachment_data: Dictionary containing attachment data with 'data', 'filename', 'mime_type'
-        
-    Returns:
-        Path to temporary file
-    """
-    import tempfile
-    import os
-    
-    try:
-        # Determine file extension
-        filename = attachment_data.get('filename', 'attachment')
-        mime_type = attachment_data.get('mime_type', '')
-        
-        if mime_type == 'application/pdf':
-            suffix = '.pdf'
-        elif mime_type.startswith('image/'):
-            suffix = '.jpg' if 'jpeg' in mime_type else '.png'
-        else:
-            # Get extension from filename if available
-            _, ext = os.path.splitext(filename)
-            suffix = ext if ext else '.bin'
-        
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-            tmp_file.write(attachment_data['data'])
-            temp_path = tmp_file.name
-        
-        logger.info(f"Saved attachment to temporary file: {temp_path}")
-        return temp_path
-        
-    except Exception as e:
-        logger.error(f"Error saving attachment to temp file: {e}")
-        raise
-
-
 def initialize_embedding_module(collection_name: str):
     """Initialize embedding module for Gmail workers"""
     from backend.common.config import settings
@@ -427,7 +318,6 @@ def initialize_embedding_module(collection_name: str):
         logger.error(f"Error initializing embedding module: {e}")
         return None
 
-
 def calculate_cutoff_date_from_cron(cron_expression: str) -> str:
     """Calculate cutoff date from cron expression"""
     from datetime import datetime, timedelta
@@ -445,6 +335,7 @@ def calculate_cutoff_date_from_cron(cron_expression: str) -> str:
         logger.warning(f"Using fallback cutoff: {fallback_date}")
         return fallback_date
 
+# Removed KNOWLEDGE_SUMMARY_SEPARATOR - now using "|||" directly
 
 def run_cron_scheduler(cron_expression: str, worker_func, worker_name: str, is_scheduled_attr=None):
     """Generic cron scheduler for workers"""

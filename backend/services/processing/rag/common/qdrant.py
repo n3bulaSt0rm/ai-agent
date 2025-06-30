@@ -132,36 +132,43 @@ class QdrantManager:
             self.reranker = None
     
     def _create_collection(self):
-        """Create collection in Qdrant if it doesn't exist"""
+        """Create collections in Qdrant if they don't exist"""
         try:
+            from backend.common.config import settings
+            
             collections = self.client.get_collections()
             collection_names = [col.name for col in collections.collections]
             
-            if self.collection_name not in collection_names:
-                logger.info(f"Creating collection: {self.collection_name}")
-                
-                # Use hybrid configuration with dense and sparse vectors
-                self.client.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config={
-                        "dense": VectorParams(
-                            size=self.vector_size,
-                            distance=Distance.DOT
-                        )
-                    },
-                    sparse_vectors_config={
-                        "sparse": SparseVectorParams(
-                            modifier=Modifier.IDF
-                        )
-                    },
-                )
+            collections_to_check = [
+                settings.QDRANT_COLLECTION_NAME,
+                settings.EMAIL_QA_COLLECTION
+            ]
+            
+            for collection_name in collections_to_check:
+                if collection_name not in collection_names:
+                    logger.info(f"Creating collection: {collection_name}")
                     
-                logger.info(f"✓ Collection created: {self.collection_name}")
-            else:
-                logger.info(f"✓ Collection exists: {self.collection_name}")
+                    self.client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config={
+                            "dense": VectorParams(
+                                size=self.vector_size,
+                                distance=Distance.DOT
+                            )
+                        },
+                        sparse_vectors_config={
+                            "sparse": SparseVectorParams(
+                                modifier=Modifier.IDF
+                            )
+                        },
+                    )
+                        
+                    logger.info(f"✓ Collection created: {collection_name}")
+                else:
+                    logger.info(f"✓ Collection exists: {collection_name}")
                 
         except Exception as e:
-            logger.error(f"Error creating collection: {e}")
+            logger.error(f"Error creating collections: {e}")
             raise
     
     def create_dense_vector(self, text: str) -> List[float]:

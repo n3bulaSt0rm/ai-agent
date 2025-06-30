@@ -44,7 +44,7 @@ async def intelligent_search(request: SearchRequest):
         logger.info(f"Forwarding search request to processing service: {processing_service_url}")
         
         # Call processing service
-        async with httpx.AsyncClient(timeout=180.0) as client:  # 3 minutes timeout
+        async with httpx.AsyncClient(timeout=300.0) as client: 
             response = await client.post(
                 processing_service_url,
                 json=processing_request

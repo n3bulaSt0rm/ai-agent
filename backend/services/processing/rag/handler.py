@@ -1,12 +1,14 @@
 import os
 import base64
 import json
+import re
 import asyncio
 import logging
 import time
 import uuid
 import google.generativeai as genai
 import functools
+import tempfile
 
 from datetime import datetime, time as datetime_time
 from typing import Dict, Any, List, Optional, Tuple
@@ -29,7 +31,7 @@ from backend.services.processing.rag.draft_monitor import EmailDraftMonitor
 
 from backend.services.processing.rag.common.utils import (
     create_deepseek_client, DeepSeekAPIClient, 
-    extract_image_attachments, extract_text_content, extract_all_attachments,
+    extract_text_content, extract_all_attachments,
     call_deepseek_async
 )
 
@@ -43,6 +45,12 @@ logger = logging.getLogger(__name__)
 # Create log directory for query processing
 QUERY_LOG_DIR = Path(__file__).resolve().parents[4] / "logs" / "query_processing"
 QUERY_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# A simple structure to mimic QueryResult for logging purposes
+class QueryResultLog:
+    def __init__(self, original_query, results):
+        self.original_query = original_query
+        self.results = results
 
 class GmailHandler:
     """
@@ -63,10 +71,8 @@ class GmailHandler:
         try:
             if settings.GOOGLE_API_KEY:
                 genai.configure(api_key=settings.GOOGLE_API_KEY)
-                logger.debug("Gemini API configured")
             
             self.gemini_processor = GeminiEmailProcessor()
-            logger.debug("Gemini email processor initialized")
         except Exception as e:
             logger.error(f"Gemini initialization failed: {e}")
             raise Exception(f"Required Gemini processor failed to initialize: {e}")
@@ -75,11 +81,7 @@ class GmailHandler:
         self.deepseek_api_url = settings.DEEPSEEK_API_URL
         self.deepseek_model = settings.DEEPSEEK_MODEL
         
-        self.deepseek_client = create_deepseek_client(
-            deepseek_api_key=self.deepseek_api_key,
-            deepseek_api_url=self.deepseek_api_url,
-            deepseek_model=self.deepseek_model
-        )
+        self.deepseek_client = None
         
         self.query_module = None
         
@@ -94,6 +96,16 @@ class GmailHandler:
         if not self.deepseek_api_key:
             logger.warning("DEEPSEEK_API_KEY not set in settings")
     
+    def _get_deepseek_client(self):
+        """Initializes and returns the DeepSeek client, creating it if it doesn't exist."""
+        if self.deepseek_client is None and self.deepseek_api_key:
+            self.deepseek_client = create_deepseek_client(
+                deepseek_api_key=self.deepseek_api_key,
+                deepseek_api_url=self.deepseek_api_url,
+                deepseek_model=self.deepseek_model
+            )
+        return self.deepseek_client
+
     def _initialize_managers(self):
         """Initialize draft monitor and API monitor after authentication."""
         if not self.service:
@@ -108,7 +120,7 @@ class GmailHandler:
         
         self.api_monitor = create_gmail_api_monitor(gmail_handler=self, poll_interval=settings.GMAIL_POLL_INTERVAL)
         
-        logger.info("Draft monitor and Gmail API monitor initialized successfully")
+        logger.debug("Draft monitor and Gmail API monitor initialized")
 
     def _init_indexing_worker(self):
         """Initialize indexing worker (called separately after authentication)"""
@@ -123,7 +135,7 @@ class GmailHandler:
             embedding_module = None
             if hasattr(self.query_module, 'embedding_module'):
                 embedding_module = self.query_module.embedding_module
-                logger.info("Using shared embedding module from query module")
+                logger.debug("Using shared embedding module from query module")
             
             self.background_worker = GmailIndexingWorker(
                 gmail_service=self.service,
@@ -132,7 +144,7 @@ class GmailHandler:
                 embedding_module=embedding_module
             )
             self.background_worker.start()
-            logger.info("Gmail indexing worker initialized and started")
+            logger.debug("Gmail indexing worker initialized and started")
             return True
         except Exception as e:
             logger.error(f"Failed to initialize indexing worker: {e}")
@@ -149,11 +161,11 @@ class GmailHandler:
             embedding_module = None
             if hasattr(self.query_module, 'embedding_module'):
                 embedding_module = self.query_module.embedding_module
-                logger.info("Using shared embedding module from query module")
+                logger.debug("Using shared embedding module from query module")
             
             self.cleanup_worker = GmailCleanupWorker(embedding_module=embedding_module)
             self.cleanup_worker.start()
-            logger.info("Gmail cleanup worker initialized and started")
+            logger.debug("Gmail cleanup worker initialized and started")
             return True
         except Exception as e:
             logger.error(f"Failed to initialize cleanup worker: {e}")
@@ -202,11 +214,11 @@ class GmailHandler:
                 memory_manager=memory_manager,  
                 deepseek_model=self.deepseek_model,
                 limit=5,
-                candidates_limit=10,
+                candidates_limit=15,
                 dense_weight=0.8,
                 sparse_weight=0.2,
                 normalization="min_max",
-                candidates_multiplier=3
+                candidates_multiplier=4
             )
             
             logger.debug(f"Vietnamese Query Module initialized with hybrid search and reranking")
@@ -233,7 +245,7 @@ class GmailHandler:
                     # Save the refreshed token
                     with open(self.token_path, 'w') as token:
                         token.write(creds.to_json())
-                    logger.info(f"Refreshed and saved authentication token to {self.token_path}")
+                    logger.debug(f"Refreshed and saved authentication token to {self.token_path}")
             except Exception as e:
                 logger.error(f"Error loading or refreshing token file: {e}")
                 raise
@@ -293,7 +305,7 @@ class GmailHandler:
                     thread_groups[thread_id] = []
                 thread_groups[thread_id].append(msg)
             
-            logger.info(f"Found {len(messages)} unread emails in {len(thread_groups)} threads")
+            logger.debug(f"Found {len(messages)} unread emails in {len(thread_groups)} threads")
             
             processed_results = []
             
@@ -316,60 +328,21 @@ class GmailHandler:
             logger.error(f"Unexpected error: {e}")
             return []
             
-    def _get_email_body(self, message: Dict) -> str:
-        """
-        Extract email body from Gmail message, including processing images with Gemini
-        
-        Args:
-            message: Gmail message object
-            
-        Returns:
-            Processed email body content
-        """
-        try:
-            message_id = message.get('id')
-            payload = message.get('payload', {})
-            
-            email_text = extract_text_content(payload)
-            
-            image_attachments = extract_image_attachments(self.service, self.user_id, payload, message_id)
-            
-            # Process attachments with Gemini if present
-            if image_attachments:
-                try:
-                    logger.info(f"Processing {len(image_attachments)} images with Gemini")
-                    return self.gemini_processor.process_email_with_attachments(
-                        email_text=email_text, 
-                        image_attachments=image_attachments,
-                        pdf_attachments=[]
-                    )
-                except Exception as e:
-                    logger.error(f"Gemini error: {e}")
-            
-            # Add image info if present
-            if image_attachments:
-                image_info = f"\n\n=== ẢNH ĐÍNH KÈM ===\n"
-                for i, img in enumerate(image_attachments, 1):
-                    image_info += f"📷 Ảnh {i}: {img.get('filename', f'image_{i}')}\n"
-                return email_text + image_info
-            
-            return email_text
-            
-        except Exception as e:
-            logger.error(f"Error extracting email body: {e}")
-            return "[Lỗi trích xuất nội dung email]"
-
     async def _process_thread(self, thread_id: str, thread_messages: List[Dict]) -> Optional[Dict[str, Any]]:
         try:
-            logger.info(f"Processing thread {thread_id} with {len(thread_messages)} messages")
+            logger.debug(f"Processing thread {thread_id} with {len(thread_messages)} messages")
+            
+            # Generate unique session ID for this processing session
+            session_id = f"thread_{thread_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
             
             existing_draft_id = self.draft_monitor.check_existing_draft(thread_id)
             if existing_draft_id:
-                logger.info(f"Found existing draft {existing_draft_id}, deleting")
+                logger.debug(f"Found existing draft {existing_draft_id}, deleting")
                 self.draft_monitor.delete_draft(existing_draft_id)
             
             thread_info = self.metadata_db.get_gmail_thread_info(thread_id)
             last_processed_message_id = thread_info.get('last_processed_message_id') if thread_info else None
+            existing_summary = thread_info.get('context_summary') if thread_info else None
             
             all_thread_emails = await self._fetch_thread_emails_with_attachments(
                 thread_id, last_processed_message_id
@@ -379,12 +352,22 @@ class GmailHandler:
                 logger.warning(f"No emails to process for thread {thread_id}")
                 return None
             
+            # Prepare email content for logging
+            thread_text_content_for_logging = "\\n\\n---\\n\\n".join(
+                f"From: {e['from']}\\nTo: {e['to']}\\nSubject: {e['subject']}\\nDate: {e['date']}\\n\\n{e['content']}" 
+                for e in all_thread_emails
+            )
+
             conversation = await self._create_gemini_conversation_for_thread(all_thread_emails)
             if not conversation:
                 logger.error(f"Failed to create Gemini conversation for thread {thread_id}")
                 return None
             
-            questions, context_summary = await self._extract_questions_with_gemini(conversation, all_thread_emails)
+            questions, context_summary = await self._extract_questions_with_gemini(
+                conversation, 
+                all_thread_emails, 
+                existing_summary=existing_summary
+            )
             
             if not questions:
                 logger.info(f"No questions found in thread {thread_id}")
@@ -393,91 +376,93 @@ class GmailHandler:
             if self.query_module is None:
                 self._init_query_module()
             
-            summarized_results = []
-            for i in range(0, len(questions), 2):
-                group = questions[i:i+2]
-                logger.debug(f"Processing question group {i//2 + 1}: {len(group)} questions")
+            # Process all questions at once instead of grouping
+            logger.debug(f"Processing {len(questions)} questions")
+            
+            content_evaluation_tasks = []
+            all_query_results_for_logging = []
+            
+            for question in questions:
+                # Search in both collections using optimized method
+                search_results, qa_results = self._search_multiple_collections(question)
                 
-                group_info = ""
-                group_qa_info = ""  # Separate info for EMAIL_QA results
-                group_queries = []
+                # For logging
+                all_results_for_question = search_results + qa_results
+                all_query_results_for_logging.append(
+                    QueryResultLog(original_query=question, results=all_results_for_question)
+                )
+
+                # Create evaluation and extraction tasks for main collection results
+                for result_item in search_results:
+                    content = result_item.get("content", "") if isinstance(result_item, dict) else str(result_item)
+                    if content:
+                        task = self._evaluate_and_extract_relevant_content(question, content)
+                        content_evaluation_tasks.append((question, result_item, task, "main"))
                 
-                for j, question in enumerate(group):
-                    group_queries.append(question)
-                    
-                    # Search in both collections using optimized method
-                    search_results, qa_results = self._search_multiple_collections(question)
-                    
-                    # Format main collection results
-                    if search_results:
-                        group_info += f"Câu hỏi {j+1}: {question}\n"
-                        for k, result_item in enumerate(search_results):
-                            content = result_item.get("content", "") if isinstance(result_item, dict) else str(result_item)
-                            metadata = result_item.get("metadata", {}) if isinstance(result_item, dict) else {}
-                            file_created_at = metadata.get("file_created_at")
-                            source = metadata.get("source")
-                            
-                            group_info += f"Tài liệu {k+1}:"
-                            if file_created_at:
-                                group_info += f" (Cập nhật: {file_created_at})"
-                            if source and not source.startswith("gmail_thread"):
-                                group_info += f" [Nguồn: {source}]"
-                            group_info += f"\n{content}\n\n"
-                    else:
-                        group_info += f"Câu hỏi {j+1}: {question}\nKhông tìm thấy thông tin liên quan.\n\n"
-                    
-                    # Format EMAIL_QA collection results (without source citation requirement)
-                    if qa_results:
-                        group_qa_info += f"Câu hỏi {j+1}: {question}\n"
-                        for k, qa_item in enumerate(qa_results):
-                            qa_content = qa_item.get("content", "") if isinstance(qa_item, dict) else str(qa_item)
-                            qa_metadata = qa_item.get("metadata", {}) if isinstance(qa_item, dict) else {}
-                            qa_file_created_at = qa_metadata.get("file_created_at")
-                            
-                            group_qa_info += f"Q&A {k+1}:"
-                            if qa_file_created_at:
-                                group_qa_info += f" (Cập nhật: {qa_file_created_at})"
-                            group_qa_info += f"\n{qa_content}\n\n"
+                # Create evaluation and extraction tasks for EMAIL_QA collection results  
+                for qa_item in qa_results:
+                    qa_content = qa_item.get("content", "") if isinstance(qa_item, dict) else str(qa_item)
+                    if qa_content:
+                        task = self._evaluate_and_extract_relevant_content(question, qa_content)
+                        content_evaluation_tasks.append((question, qa_item, task, "qa"))
+            
+            # Execute all evaluation and extraction tasks concurrently
+            extracted_info = ""
+            content_evaluation_data_for_logging = []
+            if content_evaluation_tasks:
+                logger.debug(f"Extracting information from {len(content_evaluation_tasks)} retrieved chunks...")
+                evaluation_results = await asyncio.gather(*(task for _, _, task, _ in content_evaluation_tasks))
                 
-                # Create combined summarization prompt
-                summarization_prompt = f"""
-                Hãy tóm tắt lại các nội dung liên quan đến các câu hỏi sau một cách chính xác, đầy đủ thông tin, súc tích:
-                
-                Các câu hỏi: {', '.join(group_queries)}
-                
-                Thông tin từ tài liệu chính thức:
-                {group_info}
-                
-                Thông tin từ Q&A trước đây:
-                {group_qa_info}
-                
-                LƯU Ý QUAN TRỌNG:
-                - Ưu tiên thông tin có ngày cập nhật gần đây nhất từ cả hai nguồn (tài liệu chính thức và Q&A).
-                - Nếu có nhiều thông tin về cùng một chủ đề với các ngày cập nhật khác nhau, chỉ sử dụng thông tin từ nguồn có ngày cập nhật mới nhất.
-                - Khi có thông tin nguồn từ tài liệu chính thức, hãy ghi rõ nguồn trong tóm tắt để có thể trích dẫn sau này.
-                - Thông tin từ Q&A trước đây có thể được sử dụng nhưng không cần trích dẫn nguồn cụ thể.
-                - Đối với thông tin không có ngày cập nhật rõ ràng, coi như cũ hơn so với thông tin có ngày cập nhật.
-                - Khi so sánh thông tin từ tài liệu chính thức và Q&A có cùng ngày cập nhật, ưu tiên thông tin từ tài liệu chính thức.
-                - Luôn ghi rõ ngày cập nhật thông tin trong tóm tắt khi có (ví dụ: "Theo thông tin cập nhật ngày 15/03/2024...").
-                """
-                
-                try:
-                    summary_response = await self._ask_gemini(conversation, summarization_prompt)
-                    summarized_results.append({
-                        "queries": group_queries,
-                        "summary": summary_response
-                    })
-                except Exception as e:
-                    logger.error(f"Error summarizing group {group_queries}: {e}")
-                    summarized_results.append({
-                        "queries": group_queries,
-                        "summary": f"Lỗi xử lý thông tin cho các câu hỏi: {', '.join(group_queries)}"
-                    })
+                for (question, chunk, task, source_type), extraction_result in zip(content_evaluation_tasks, evaluation_results):
+                    content_evaluation_data_for_logging.append((question, chunk, extraction_result))
+                    if extraction_result.get("is_relevant", False):
+                        metadata = chunk.get("metadata", {}) if isinstance(chunk, dict) else {}
+                        file_created_at = metadata.get("file_created_at")
+                        source = metadata.get("source")
+                        
+                        # Build source info
+                        source_type_label = "tài liệu chính thức" if source_type == "main" else "Q&A trước đây"
+                        source_info = f"**Trích xuất từ {source_type_label}:**"
+                        
+                        # Add source citation only for main collection
+                        if source_type == "main" and source and not source.startswith("gmail_thread"):
+                            source_info += f" [Nguồn: {source}]"
+                        
+                        # Add update date if available
+                        if file_created_at:
+                            source_info += f" (Cập nhật: {file_created_at})"
+                        
+                        # Format final output
+                        extracted_info += f"""### Thông tin liên quan đến câu hỏi: "{question}"
+
+{source_info}
+---
+{extraction_result['relevant_content']}
+---
+
+"""
+            
+            if not extracted_info:
+                extracted_info = f"Không tìm thấy thông tin liên quan đến các câu hỏi: {', '.join(questions)}"
+            
+            extracted_results = [{
+                "queries": questions,
+                "extracted_content": extracted_info
+            }]
             
             email_response = await self._generate_email_response_with_gemini(
-                conversation, all_thread_emails, summarized_results
+                conversation, all_thread_emails, extracted_results, context_summary
             )
             
+            # Save logs for this processing session
+            self._save_query_processing_log(
+                text_content=thread_text_content_for_logging,
+                results=all_query_results_for_logging,
+                content_evaluation_data=content_evaluation_data_for_logging,
+                final_response=email_response,
+                session_id=session_id
+            )
+
             conversation = None
             
             newest_email = thread_messages[-1]
@@ -549,9 +534,54 @@ class GmailHandler:
             logger.error(f"Error marking message as read: {e}")
             raise
             
+    def _filter_new_messages(self, messages: List[Dict], last_processed_message_id: str = None) -> List[Dict]:
+        """Filter messages to get only new ones after the last processed message"""
+        if not last_processed_message_id:
+            return messages
+        
+        filtered_messages = []
+        found_last = False
+        
+        for message in messages:
+            if message['id'] == last_processed_message_id:
+                found_last = True
+                continue
+            if found_last:
+                filtered_messages.append(message)
+        
+        if not found_last:
+            logger.warning(f"Last processed message {last_processed_message_id} not found, processing all messages")
+            return messages
+        
+        return filtered_messages
+
+    def _process_email_content(self, message: Dict) -> Dict[str, Any]:
+        try:
+            payload = message['payload']
+            headers = {h['name']: h['value'] for h in payload['headers']}
+            
+            original_text = extract_text_content(payload)
+            attachments = extract_all_attachments(self.service, self.user_id, payload, message['id'])
+            
+            return {
+                'id': message['id'],
+                'from': headers.get('From', ''),
+                'to': headers.get('To', ''),
+                'subject': headers.get('Subject', ''),
+                'date': headers.get('Date', ''),
+                'content': original_text,  
+                'attachments': attachments, 
+                'has_attachments': len(attachments) > 0,
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing message {message.get('id')}: {e}")
+            return None
 
     async def _fetch_thread_emails_with_attachments(self, thread_id: str, last_processed_message_id: str = None) -> List[Dict[str, Any]]:
+        """Fetch and process thread emails with attachments - clean and simplified version"""
         try:
+            # Fetch thread messages
             thread_messages = self.service.users().threads().get(
                 userId=self.user_id, 
                 id=thread_id,
@@ -559,75 +589,21 @@ class GmailHandler:
             ).execute()
             
             messages = thread_messages.get('messages', [])
-            
             if not messages:
                 return []
             
-            filtered_messages = []
-            if last_processed_message_id:
-                found_last = False
-                for message in messages:
-                    if message['id'] == last_processed_message_id:
-                        found_last = True
-                        continue
-                    if found_last:
-                        filtered_messages.append(message)
-                
-                if not found_last:
-                    logger.warning(f"Last processed message {last_processed_message_id} not found, processing all messages")
-                    filtered_messages = messages
-            else:
-                filtered_messages = messages
-            
+            # Filter to get only new messages
+            filtered_messages = self._filter_new_messages(messages, last_processed_message_id)
             if not filtered_messages:
                 logger.info(f"No new messages to process for thread {thread_id}")
                 return []
             
+            # Process each message
             processed_emails = []
             for message in filtered_messages:
-                try:
-                    headers = {h['name']: h['value'] for h in message['payload']['headers']}
-                    
-                    # Extract text content
-                    email_text = extract_text_content(message['payload'])
-                    
-                    # Extract all attachments (images and PDFs)
-                    attachments = extract_all_attachments(
-                        self.service, self.user_id, message['payload'], message['id']
-                    )
-                    
-                    # Process with Gemini if attachments exist
-                    if attachments:
-                        image_attachments = [att for att in attachments if att.get('attachment_type') == 'image']
-                        pdf_attachments = [att for att in attachments if att.get('attachment_type') == 'pdf']
-                        
-                        try:
-                            processed_content = self.gemini_processor.process_email_with_attachments(
-                                email_text=email_text, 
-                                image_attachments=image_attachments,
-                                pdf_attachments=pdf_attachments
-                            )
-                        except Exception as e:
-                            logger.error(f"Gemini processing failed for message {message['id']}: {e}")
-                            processed_content = email_text + f"\n--- Lỗi xử lý đính kèm: {str(e)} ---"
-                    else:
-                        processed_content = email_text
-                    
-                    processed_emails.append({
-                        'id': message['id'],
-                        'from': headers.get('From', ''),
-                        'to': headers.get('To', ''),
-                        'subject': headers.get('Subject', ''),
-                        'date': headers.get('Date', ''),
-                        'content': processed_content,
-                        'original_text': email_text,
-                        'has_attachments': len(attachments) > 0,
-                        'attachment_count': len(attachments)
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error processing message {message['id']}: {e}")
-                    continue
+                processed_email = self._process_email_content(message)
+                if processed_email: 
+                    processed_emails.append(processed_email)
             
             logger.info(f"Processed {len(processed_emails)} emails from thread {thread_id}")
             return processed_emails
@@ -638,129 +614,299 @@ class GmailHandler:
 
     async def _create_gemini_conversation_for_thread(self, thread_emails: List[Dict[str, Any]]) -> Optional[Any]:
         try:
-            import google.generativeai as genai
-            
-            gmail_address = settings.GMAIL_EMAIL_ADDRESS 
-            system_message = f"""
-Bạn là trợ lý AI chuyên nghiệp hỗ trợ {gmail_address} trong việc phân tích và xử lý email từ sinh viên.
+            system_instruction = f"""
+# VAI TRÒ VÀ MỤC TIÊU
+Bạn là một Trợ lý AI chuyên nghiệp, được thiết kế chuyên biệt để hỗ trợ tài khoản email {settings.GMAIL_EMAIL_ADDRESS} của Phòng Công tác Sinh viên. Nhiệm vụ chính của bạn là phân tích các luồng email từ sinh viên một cách chính xác, khách quan và hiệu quả để chuẩn bị cho các bước xử lý tiếp theo.
 
-THÔNG TIN QUAN TRỌNG:
-- Bạn đang hỗ trợ tài khoản: {gmail_address}
-- Vai trò: Trợ lý phòng công tác sinh viên
-- Nhiệm vụ: Phân tích email, tóm tắt nội dung, trích xuất câu hỏi và tạo phản hồi chuyên nghiệp
+# CÁC NGUYÊN TẮC HOẠT ĐỘNG BẮT BUỘC
+Bạn PHẢI tuân thủ nghiêm ngặt các nguyên tắc sau trong mọi phản hồi:
 
-NGUYÊN TẮC HOẠT ĐỘNG:
-1. Phân tích toàn bộ thread email để hiểu context đầy đủ
-2. Tóm tắt nội dung một cách chi tiết và chính xác
-3. Trích xuất các câu hỏi chưa được giải đáp từ sinh viên
-4. Tạo phản hồi chuyên nghiệp, thân thiện nhưng trang trọng
-5. Đảm bảo thông tin chính xác và cập nhật
+1.  **Objectivity:** Chỉ phân tích và trích xuất thông tin dựa trên dữ liệu được cung cấp trong email. Tuyệt đối không suy diễn, không thêm thông tin không có, và không đưa ra ý kiến cá nhân.
+2.  **Precision:** Đảm bảo mọi thông tin được tóm tắt hoặc trích xuất đều chính xác tuyệt đối so với email gốc.
+3.  **Task-Focus:** Luôn bám sát vào yêu cầu cụ thể của từng prompt theo sau. Không thực hiện các hành động không được yêu cầu.
 
-Hãy sẵn sàng phân tích thread email.
+# NĂNG LỰC CỐT LÕI
+Bạn có khả năng hiểu sâu sắc ngữ cảnh của một cuộc hội thoại qua email, phân biệt được người gửi và người nhận, và nhận diện chính xác các câu hỏi, yêu cầu hoặc các điểm thông tin quan trọng.
+
+Hãy sẵn sàng áp dụng các nguyên tắc và năng lực này để phân tích luồng email sẽ được cung cấp.
 """
             
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            # Sử dụng system_instruction để thiết lập vai trò cho model
+            model = genai.GenerativeModel(
+                "gemini-2.5-flash",
+                system_instruction=system_instruction,
+                generation_config={
+                    "max_output_tokens": 8192
+                }
+            )
             chat = model.start_chat(history=[])
             
-            # Send system message
-            response = chat.send_message(system_message)
-            
-            logger.info("Successfully created Gemini conversation for thread analysis")
             return chat
             
         except Exception as e:
             logger.error(f"Error creating Gemini conversation: {e}")
             return None
 
-    async def _extract_questions_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]]) -> tuple[List[str], str]:
+    def _extract_json_from_response(self, raw_response: str) -> Optional[Dict[str, Any]]:
         """
-        Extract questions and create context summary using Gemini.
+        Helper function to extract and parse JSON from Gemini response.
+        Handles various formats: plain JSON, markdown code blocks, etc.
+        """
+        # Clean up the response
+        response_text = raw_response.strip()
         
-        Args:
-            conversation: Gemini conversation object
-            thread_emails: List of thread email data
-            
-        Returns:
-            Tuple of (questions_list, context_summary)
-        """
+        # Extract JSON from code blocks if present
+        if response_text.startswith("```"):
+            # Find first { and last }
+            start_idx = response_text.find("{")
+            end_idx = response_text.rfind("}")
+            if start_idx != -1 and end_idx != -1:
+                response_text = response_text[start_idx:end_idx + 1]
+        
+        # Sanitize control characters
+        response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', response_text)
+        
         try:
-            # Prepare thread content for analysis
-            thread_content = ""
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            return None
+
+    async def _extract_questions_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]], existing_summary: Optional[str] = None) -> tuple[List[str], str]:
+        """Extract questions and create context summary using Gemini File API."""
+        try:
+            prompt_parts = []
+            thread_text = ""
+            uploaded_files = []
+            
+            # Process each email
             for i, email in enumerate(thread_emails, 1):
-                thread_content += f"""
+                email_text = f"""
 === EMAIL {i} ===
 Từ: {email['from']}
 Đến: {email['to']}
 Tiêu đề: {email['subject']}
 Ngày: {email['date']}
-Nội dung:
-{email['content']}
-
+Nội dung: {email['content']}
 """
-            
-            analysis_prompt = f"""
-Hãy phân tích thread email sau và thực hiện 2 nhiệm vụ:
+                if email.get('attachments'):
+                    email_text += "\n--- File đính kèm ---\n"
+                    for att in email['attachments']:
+                        email_text += f"- {att.get('filename', 'N/A')}\n"
+                
+                thread_text += email_text + "\n"
+                
+                # Upload attachments to Gemini
+                for attachment in email.get('attachments', []):
+                    mime_type = attachment.get('mime_type')
+                    data = attachment.get('data')
+                    filename = attachment.get('filename', 'attachment')
 
-1. TÓM TẮT CONTEXT: Tạo tóm tắt chi tiết, đầy đủ thông tin về toàn bộ thread email (đối với nội dung từ attachment thì cần ngắn gọn, súc tích nhưng vẫn đầy đủ thông tin bổ trợ cho email của người hỏi)
+                    if not mime_type or not data:
+                        continue
 
-2. TRÍCH XUẤT CÂU HỎI: Tìm tất cả các câu hỏi/yêu cầu thông tin từ sinh viên mà chưa được giải đáp hoặc cần thông tin thêm
+                    if mime_type.startswith('image/') or mime_type == 'application/pdf':
+                        try:
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as temp_file:
+                                temp_file.write(data)
+                                temp_path = temp_file.name
+                            
+                            uploaded_file = genai.upload_file(temp_path, mime_type=mime_type, display_name=filename)
+                            
+                            # Wait for processing
+                            while uploaded_file.state.name == "PROCESSING":
+                                time.sleep(1)
+                                uploaded_file = genai.get_file(uploaded_file.name)
+                            
+                            if uploaded_file.state.name == "ACTIVE":
+                                prompt_parts.append(uploaded_file)
+                                uploaded_files.append((uploaded_file, temp_path))
+                            else:
+                                os.unlink(temp_path)
+                                        
+                        except Exception:
+                            if 'temp_path' in locals():
+                                try:
+                                    os.unlink(temp_path)
+                                except:
+                                    pass
 
-THREAD EMAIL:
-{thread_content}
+            # Create prompt
+            analysis_prompt = (self._create_update_summary_prompt(thread_text, existing_summary) 
+                             if existing_summary 
+                             else self._create_new_summary_prompt(thread_text))
 
-LƯU Ý QUAN TRỌNG:
-- Chỉ trích xuất câu hỏi từ email sinh viên (không phải từ email phản hồi của phòng công tác sinh viên)
-- Câu hỏi phải rõ ràng và cần thông tin cụ thể
-- Bỏ qua các lời chào hỏi, cảm ơn đơn thuần
-- Mỗi câu hỏi phải hoàn chỉnh và có thể tìm kiếm được
-
-Trả về JSON với format:
-{{
-    "context_summary": "Tóm tắt chi tiết toàn bộ thread email...",
-    "questions": [
-        "Câu hỏi 1 được viết rõ ràng và hoàn chỉnh",
-        "Câu hỏi 2 được viết rõ ràng và hoàn chỉnh",
-        ...
-    ]
-}}
-
-CHỈ TRẢ VỀ JSON VALID:
-"""
-            
-            response = conversation.send_message(analysis_prompt)
-            response_text = response.text.strip()
-            
-            # Clean and parse JSON
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
+            full_prompt = [analysis_prompt] + prompt_parts
             
             try:
-                data = json.loads(response_text)
-                questions = data.get("questions", [])
-                context_summary = data.get("context_summary", "")
+                response = conversation.send_message(full_prompt)
                 
-                # Filter out empty questions
-                questions = [q.strip() for q in questions if q.strip()]
+                # Extract and parse JSON using helper function
+                data = self._extract_json_from_response(response.text)
                 
-                logger.info(f"Extracted {len(questions)} questions and context summary")
-                return questions, context_summary
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse Gemini JSON response: {e}")
-                logger.error(f"Response text: {response_text}")
-                
-                # Fallback: try to extract basic info
-                fallback_summary = f"Thread email với {len(thread_emails)} tin nhắn"
-                fallback_questions = []
-                
-                return fallback_questions, fallback_summary
+                if data:
+                    questions = [q.strip() for q in data.get("questions", []) if q.strip()]
+                    context_summary = data.get("context_summary", "")
+                    return questions, context_summary
+                else:
+                    logger.error(f"Failed to parse JSON from Gemini response:\n---\n{response.text}\n---")
+                    return [], f"Thread email với {len(thread_emails)} tin nhắn"
+                    
+            except Exception as e:
+                logger.error(f"Error sending message to Gemini: {e}")
+                return [], f"Thread email với {len(thread_emails)} tin nhắn"
+                    
+            finally:
+                # Cleanup files
+                for uploaded_file, temp_path in uploaded_files:
+                    try:
+                        genai.delete_file(uploaded_file.name)
+                        os.unlink(temp_path)
+                    except:
+                        pass
             
         except Exception as e:
             logger.error(f"Error extracting questions with Gemini: {e}")
             return [], "Lỗi phân tích thread email"
+    
+    def _create_update_summary_prompt(self, thread_content: str, existing_summary: str) -> str:
+        """Creates a prompt to update a summary and extract questions from new emails in a thread."""
+        return f"""
+# VAI TRÒ VÀ MỤC TIÊU
+Bạn là một Trợ lý AI chuyên nghiệp, có nhiệm vụ phân tích các email mới trong một luồng hội thoại và tích hợp chúng vào bối cảnh chung một cách chính xác. Mục tiêu cuối cùng là cập nhật tóm tắt và rút ra các câu hỏi mới để hệ thống có thể tìm kiếm thông tin trả lời.
+
+# NHIỆM VỤ
+Phân tích các email mới dưới đây. Trọng tâm của bạn là các câu hỏi và yêu cầu tường minh trong **nội dung email**. Các **file đính kèm (hình ảnh, PDF) chỉ đóng vai trò là bằng chứng hoặc thông tin bổ sung** cho các yêu cầu đó và **TUYỆT ĐỐI KHÔNG** được dùng để tự tạo ra câu hỏi mới.
+
+**TÓM TẮT BỐI CẢNH HIỆN TẠI:**
+(Lưu ý: Bối cảnh này có thể chứa 2 phần, được ngăn cách bởi '|||'. Phần đầu là tóm tắt hội thoại, phần sau là tóm tắt tri thức.)
+---
+{existing_summary}
+---
+
+**CÁC EMAIL MỚI CẦN PHÂN TÍCH:**
+(Lưu ý: Các file đính kèm được cung cấp riêng và chỉ mang tính bổ trợ cho nội dung email)
+---
+{thread_content}
+---
+
+# QUY TRÌNH SUY LUẬN VÀ THỰC HIỆN (BẮT BUỘC)
+1.  **Phân tích Email Mới:** Đọc kỹ từng email mới. Xác định người gửi và nội dung chính họ muốn truyền đạt.
+2.  **Cập nhật Tóm tắt (2 Phần):**
+    -   **Phần 1 - Tóm tắt cuộc hội thoại:** Dựa vào tóm tắt hội thoại cũ (nếu có, là phần trước dấu ngăn cách trong bối cảnh hiện tại) và email mới, tạo một bản tóm tắt **HOÀN TOÀN MỚI** cho **toàn bộ cuộc hội thoại**.
+    -   **Phần 2 - Tóm tắt tri thức:** Dựa trên **toàn bộ luồng email**, hãy **chắt lọc và tổng hợp lại các thông tin hữu ích có thể tái sử dụng** được cung cấp trong các email phản hồi từ tài khoản `{settings.GMAIL_EMAIL_ADDRESS}`. Đây là phần CỰC KỲ QUAN TRỌNG, dùng để chunking cho RAG.
+        - **Nguồn tri thức chính:** Nội dung trong các email được gửi **TỪ** `{settings.GMAIL_EMAIL_ADDRESS}` (ví dụ: các câu trả lời, hướng dẫn quy trình, thông báo, yêu cầu bổ sung giấy tờ...).
+        - **Bối cảnh:** Sử dụng nội dung email của sinh viên (người hỏi) để làm rõ bối cảnh cho câu trả lời của phòng CTSV.
+        - **Yêu cầu:** Bản tóm tắt tri thức phải chi tiết, đầy đủ, khách quan và **TUYỆT ĐỐI KHÔNG** chứa thông tin định danh cá nhân (tên, MSSV), lời chào hỏi, hoặc các câu trao đổi không mang tính tri thức. Hãy tích hợp thông tin mới này với tóm tắt tri thức cũ (nếu có) để tạo ra một bản tổng hợp hoàn chỉnh.
+3.  **Tái cấu trúc Câu hỏi Mới:**
+    -   Xác định các câu hỏi hoặc yêu cầu **chỉ có trong nội dung của các email mới**.
+    -   Tái cấu trúc mỗi câu hỏi thành một **truy vấn tìm kiếm độc lập, đầy đủ ngữ cảnh**.
+    -   Loại bỏ Thông tin Cá nhân (PII) khỏi truy vấn.
+    -   Sử dụng thông tin trong file đính kèm mới để làm giàu ngữ cảnh cho các câu hỏi.
+    -   **KHÔNG** tạo câu hỏi từ tóm tắt cũ. Chỉ tập trung vào những gì mới được hỏi.
+
+# VÍ DỤ CỤ THỂ
+---
+**Input (Tóm tắt bối cảnh hiện tại):**
+"Sinh viên hỏi về thủ tục xin học bổng XYZ ||| Thông tin cần xử lý: thủ tục và giấy tờ cần thiết cho học bổng XYZ."
+
+**Input (Email mới + file đính kèm là ảnh 'Giấy chứng nhận hộ nghèo'):**
+"Dạ em chào phòng CTSV, em đã chuẩn bị xong hồ sơ như hướng dẫn ạ. Em gửi file PDF đơn và giấy chứng nhận hộ nghèo. Nhờ phòng kiểm tra giúp em xem đã đủ chưa ạ?"
+
+**Output (JSON):**
+```json
+{{
+  "context_summary": "Sinh viên hỏi về thủ tục xin học bổng XYZ và đã nộp đơn cùng giấy chứng nhận hộ nghèo, muốn xác nhận hồ sơ đã đủ chưa ||| Thông tin cần xử lý: thủ tục và giấy tờ cần thiết cho học bổng XYZ, bao gồm đơn và giấy chứng nhận hộ nghèo. Cần xác định danh sách đầy đủ các giấy tờ.",
+  "questions": [
+    "danh sách đầy đủ các giấy tờ cần thiết cho hồ sơ học bổng XYZ khi có giấy chứng nhận hộ nghèo"
+  ]
+}}
+```
+---
+
+# ĐỊNH DẠNG ĐẦU RA (JSON)
+**QUAN TRỌNG**: Chỉ trả về một đối tượng JSON hợp lệ. Giá trị của `context_summary` PHẢI là một chuỗi duy nhất KHÔNG chứa dấu xuống dòng, với hai phần tóm tắt được ngăn cách bởi chuỗi định danh đặc biệt '|||'.
+```json
+{{
+  "context_summary": "PHẦN 1 - Tóm tắt cuộc hội thoại đã cập nhật ||| PHẦN 2 - Tóm tắt tri thức đã cập nhật và chi tiết.",
+  "questions": [
+    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ nhất được tạo từ email mới.",
+    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ hai được tạo từ email mới."
+  ]
+}}
+```
+
+# QUY TẮC RÀNG BUỘC
+-   Tóm tắt phải khách quan, không suy diễn thông tin không có trong email và file đính kèm.
+-   Nếu không có câu hỏi nào trong các email mới, hãy trả về một mảng rỗng cho "questions".
+-   Luôn trả về cả 2 phần tóm tắt trong `context_summary`, ngay cả khi một trong hai phần trống.
+"""
+    
+    def _create_new_summary_prompt(self, thread_content: str) -> str:
+        """Creates a prompt to generate a new summary and extract questions from a thread."""
+        return f"""
+# VAI TRÒ VÀ MỤC TIÊU
+Bạn là một Trợ lý AI chuyên nghiệp, có nhiệm vụ phân tích một luồng email lần đầu tiên để hiểu rõ bối cảnh và rút ra các câu hỏi hoặc yêu cầu chính, đồng thời trích xuất các thông tin tri thức hữu ích.
+
+# NHIỆM VỤ
+Phân tích kỹ lưỡng luồng email dưới đây. Trọng tâm của bạn là các câu hỏi và yêu cầu tường minh trong **nội dung email**. Các **file đính kèm (hình ảnh, PDF) chỉ đóng vai trò là bằng chứng hoặc thông tin bổ sung** cho các yêu cầu đó và **TUYỆT ĐỐI KHÔNG** được dùng để tự tạo ra câu hỏi mới.
+
+# QUY TRÌNH SUY LUẬN VÀ THỰC HIỆN (BẮT BUỘC)
+1.  **Tóm tắt Bối cảnh (2 Phần):**
+    -   **Phần 1 - Tóm tắt cuộc hội thoại:** Đọc toàn bộ luồng email và tạo một bản tóm tắt khách quan về (các) vấn đề chính mà người gửi đưa ra và diễn biến cuộc hội thoại.
+    -   **Phần 2 - Tóm tắt tri thức:** Dựa trên **toàn bộ luồng email**, hãy **chắt lọc và tổng hợp lại các thông tin hữu ích có thể tái sử dụng** được cung cấp trong các email phản hồi từ tài khoản `{settings.GMAIL_EMAIL_ADDRESS}`. Đây là phần CỰC KỲ QUAN TRỌNG, dùng để chunking cho RAG.
+        - **Nguồn tri thức chính:** Nội dung trong các email được gửi **TỪ** `{settings.GMAIL_EMAIL_ADDRESS}` (ví dụ: các câu trả lời, hướng dẫn quy trình, thông báo, yêu cầu bổ sung giấy tờ...).
+        - **Bối cảnh:** Sử dụng nội dung email của sinh viên (người hỏi) để làm rõ bối cảnh cho câu trả lời của phòng CTSV.
+        - **Yêu cầu:** Bản tóm tắt tri thức phải chi tiết, đầy đủ, khách quan và **TUYỆT ĐỐI KHÔNG** chứa thông tin định danh cá nhân (tên, MSSV), lời chào hỏi, hoặc các câu trao đổi không mang tính tri thức. Tích hợp thông tin quan trọng từ file đính kèm vào phần này.
+2.  **Tái cấu trúc Câu hỏi:**
+    -   Xác định tất cả các câu hỏi hoặc yêu cầu tường minh của người gửi **từ nội dung email**.
+    -   Đối với mỗi câu hỏi, hãy tái cấu trúc nó thành một **truy vấn tìm kiếm độc lập, đầy đủ ngữ cảnh**.
+    -   **Chuyển đổi câu hỏi trạng thái:** Nếu sinh viên hỏi về tình trạng cụ thể (ví dụ: "Hồ sơ của em được duyệt chưa?"), hãy chuyển đổi nó thành một truy vấn chung về quy trình hoặc yêu cầu (ví dụ: "Quy trình xét duyệt hồ sơ gồm những bước nào và tiêu chuẩn là gì?").
+    -   **Chuyển đổi "Thiếu" thành "Đủ":** Nếu sinh viên hỏi "cần bổ sung gì thêm?", hãy chuyển nó thành truy vấn về "danh sách đầy đủ các yêu cầu".
+    -   **Loại bỏ Thông tin Cá nhân (PII):** Tất cả các truy vấn được tạo ra **TUYỆT ĐỐI KHÔNG** được chứa tên riêng, MSSV, hoặc bất kỳ thông tin định danh cá nhân nào khác.
+    -   Sử dụng thông tin trong file đính kèm để làm giàu ngữ cảnh cho các câu hỏi đó.
+    -   **QUAN TRỌNG:** Câu hỏi phải xuất phát từ nội dung email. **TUYỆT ĐỐI KHÔNG** tự tạo câu hỏi chỉ dựa vào nội dung file đính kèm.
+
+# LUỒNG EMAIL CẦN PHÂN TÍCH
+(Lưu ý: Các file đính kèm được cung cấp riêng và chỉ mang tính bổ trợ cho nội dung email)
+---
+{thread_content}
+---
+
+# VÍ DỤ CỤ THỂ
+---
+**Input (Email Content + file đính kèm là ảnh "Giấy xác nhận của bệnh viện"):**
+"Kính gửi Phòng Công tác Sinh viên, em là Lê Thị C, MSSV 2020xxxx. Em viết email này để nộp hồ sơ xin học bổng ABC cho học kỳ 1 năm học 2024-2025. Em có đính kèm file PDF là đơn xin học bổng đã điền đầy đủ thông tin. Xin hỏi hồ sơ của em như vậy đã đủ chưa và khi nào có kết quả ạ? Em cảm ơn."
+
+**Output (JSON):**
+```json
+{{
+  "context_summary": "Sinh viên Lê Thị C (MSSV 2020xxxx) nộp hồ sơ xin học bổng ABC và hỏi về tính đầy đủ của hồ sơ cũng như thời gian công bố kết quả ||| Thông tin cần xử lý: yêu cầu về hồ sơ xin học bổng ABC học kỳ 1 2024-2025 và thời gian công bố kết quả. Sinh viên đã nộp đơn dạng PDF.",
+  "questions": [
+    "danh sách đầy đủ các giấy tờ cần thiết cho hồ sơ xin học bổng ABC",
+    "thời gian dự kiến công bố kết quả học bổng ABC học kỳ 1 năm học 2024-2025"
+  ]
+}}
+```
+---
+
+# ĐỊNH DẠNG ĐẦU RA (JSON)
+**QUAN TRỌNG**: Chỉ trả về một đối tượng JSON hợp lệ. Giá trị của `context_summary` PHẢI là một chuỗi duy nhất KHÔNG chứa dấu xuống dòng, với hai phần tóm tắt được ngăn cách bởi chuỗi định danh đặc biệt '|||'.
+```json
+{{
+  "context_summary": "PHẦN 1 - Tóm tắt cuộc hội thoại ||| PHẦN 2 - Tóm tắt tri thức chi tiết.",
+  "questions": [
+    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ nhất.",
+    "Truy vấn tìm kiếm đầy đủ ngữ cảnh thứ hai."
+  ]
+}}
+```
+
+# QUY TẮC RÀNG BUỘC
+-   Tập trung vào các câu hỏi trong email. File đính kèm dùng để cung cấp thêm chi tiết.
+-   Tóm tắt và truy vấn phải khách quan, chỉ dựa vào thông tin được cung cấp.
+-   Nếu không có câu hỏi nào, hãy trả về một mảng rỗng cho "questions".
+-   Luôn trả về cả 2 phần tóm tắt trong `context_summary`, ngay cả khi một trong hai phần trống.
+"""
 
     async def _ask_gemini(self, conversation: Any, prompt: str) -> str:
         try:
@@ -770,14 +916,15 @@ CHỈ TRẢ VỀ JSON VALID:
             logger.error(f"Error asking Gemini: {e}")
             return f"Lỗi khi hỏi Gemini: {str(e)}"
 
-    async def _generate_email_response_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]], summarized_results: List[Dict]) -> str:
+    async def _generate_email_response_with_gemini(self, conversation: Any, thread_emails: List[Dict[str, Any]], extracted_results: List[Dict], context_summary: str) -> str:
         """
         Generate email response using Gemini with search results.
         
         Args:
             conversation: Gemini conversation object
             thread_emails: Original thread emails
-            summarized_results: Results from Vietnamese Query Module
+            extracted_results: Results from evaluation and extraction process
+            context_summary: Summary of the thread
             
         Returns:
             Generated email response text
@@ -786,46 +933,63 @@ CHỈ TRẢ VỀ JSON VALID:
             # Prepare unread student emails content
             student_questions = ""
             for email in thread_emails:
-                if email['from'] and settings.GMAIL_EMAIL_ADDRESS not in email['from']:  # Student email
-                    student_questions += f"Từ sinh viên: {email['content']}\n\n"
-            
-            email_prompt = f"""
-Dựa trên cuộc hội thoại email và thông tin đã tìm được, hãy soạn một email phản hồi chuyên nghiệp cho sinh viên.
+                if email['from'] and settings.GMAIL_EMAIL_ADDRESS not in email['from']: 
+                    student_questions += f"- Nội dung từ email của sinh viên: {email['content']}\\n"
 
-NỘI DUNG CÂU HỎI TỪ SINH VIÊN:
+            retrieved_information = ""
+            for result in extracted_results:
+                retrieved_information += f"{result['extracted_content']}\\n"
+            
+            email_prompt = f"""# VAI TRÒ
+Bạn là một Trợ lý AI của Phòng Công tác Sinh viên, có nhiệm vụ soạn một email phản hồi duy nhất, chuyên nghiệp, và hữu ích để trả lời các câu hỏi của sinh viên dựa trên thông tin được cung cấp.
+
+# BỐI CẢNH CUỘC HỘI THOẠI
+Đây là tóm tắt của luồng email cho đến nay. Phần đầu là tóm tắt hội thoại, phần sau là tóm tắt tri thức đã biết.
+---
+{context_summary}
+---
+
+# CÁC CÂU HỎI MỚI NHẤT TỪ SINH VIÊN
+Đây là nội dung các email mới nhất từ sinh viên cần được trả lời.
+---
 {student_questions}
+---
 
-THÔNG TIN TÌM ĐƯỢC:
-"""
-            for i, result in enumerate(summarized_results, 1):
-                email_prompt += f"Nhóm thông tin {i}: {result['summary']}\n"
-            
-            email_prompt += f"""
+# THÔNG TIN HỖ TRỢ ĐÃ TÌM KIẾM ĐƯỢC
+Đây là các thông tin được trích xuất từ cơ sở tri thức để giúp bạn trả lời. Mỗi đoạn trích có thể đi kèm thông tin nguồn và ngày cập nhật.
+---
+{retrieved_information}
+---
 
-YÊU CẦU SOẠN EMAIL:
-- Viết email phản hồi bằng tiếng Việt chuẩn, chuyên nghiệp
-- Định dạng: văn bản thuần (plain text), KHÔNG dùng markdown
-- Cấu trúc: lời chào, nội dung trả lời từng câu hỏi, lời kết thân thiện
-- Ghi rõ ngày cập nhật thông tin khi có (ưu tiên thông tin mới nhất)
-- Trích dẫn nguồn thông tin ở cuối email nếu cần (chỉ với thông tin từ tài liệu chính thức)
-- Thông tin từ Q&A trước đây có thể sử dụng trực tiếp mà không cần trích dẫn nguồn
-- Khi có nhiều thông tin về cùng chủ đề, ưu tiên và chỉ sử dụng thông tin có ngày cập nhật gần đây nhất
-- Nếu thiếu thông tin, hướng dẫn sinh viên liên hệ bộ phận phù hợp
-- Ký tên: "{settings.GMAIL_EMAIL_ADDRESS or 'Phòng Công tác Sinh viên'}"
+# NHIỆM VỤ
+Dựa trên **TOÀN BỘ** thông tin trên (bối cảnh, câu hỏi mới, và thông tin hỗ trợ), hãy soạn một email phản hồi **DUY NHẤT** cho sinh viên.
 
-CHỈ TRẢ VỀ NỘI DUNG EMAIL:
+# QUY TẮC SOẠN THẢO (BẮT BUỘC TUÂN THỦ)
+1.  **Giọng văn:** Chuyên nghiệp, rõ ràng, hỗ trợ và đồng cảm với sinh viên.
+2.  **Định dạng:** Chỉ sử dụng văn bản thuần túy (plain text), **KHÔNG** dùng Markdown.
+3.  **Cấu trúc:**
+    *   Bắt đầu bằng lời chào phù hợp (ví dụ: "Chào bạn,").
+    *   Tổng hợp thông tin từ nhiều nguồn để trả lời **từng câu hỏi** của sinh viên một cách mạch lạc. Đừng chỉ liệt kê các đoạn trích.
+    *   Ở cuối email, nếu có trích dẫn, thêm mục "NGUỒN THAM KHẢO".
+    *   Kết thúc bằng lời kết thân thiện và chữ ký.
+4.  **Xử lý thông tin và trích dẫn:**
+    *   Nếu có nhiều thông tin về cùng một chủ đề, hãy ưu tiên và chỉ sử dụng thông tin có ngày cập nhật **gần đây nhất**. Phải nêu rõ ngày cập nhật trong câu trả lời (ví dụ: "Theo thông tin cập nhật ngày DD/MM/YYYY,...").
+    *   Đối với thông tin từ `tài liệu chính thức` có `[Nguồn: ...]`, bạn **BẮT BUỘC** phải trích dẫn nguồn. Sử dụng footnote dạng số (ví dụ: `...nội dung [1].`) và liệt kê tất cả các nguồn ở cuối email dưới tiêu đề `NGUỒN THAM KHẢO: link nguồn`.
+    *   Thông tin từ `Q&A trước đây` có thể dùng trực tiếp mà không cần trích dẫn nguồn.
+    *   Nếu không có thông tin nào được trích xuất từ nguồn tham khảo, **TUYỆT ĐỐI KHÔNG** hiển thị mục "NGUỒN THAM KHẢO".
+5.  **Trường hợp thiếu thông tin:** Nếu thông tin tìm được không đủ để trả lời một câu hỏi nào đó, hãy trung thực nêu rõ: "Về vấn đề [...], hiện tại hệ thống chưa có thông tin chi tiết. Bạn vui lòng liên hệ trực tiếp [...] để được hỗ trợ."
+6.  **Chữ ký:** Kết thúc email bằng chữ ký sau:
+Trân trọng,
+Phòng Công tác Sinh viên
+
+# YÊU CẦU ĐẦU RA
+**CHỈ TRẢ VỀ NỘI DUNG EMAIL PHẢN HỒI HOÀN CHỈNH.**
 """
             
             final_response = "Có lỗi xảy ra khi tạo phản hồi."
-            if conversation and self.deepseek_client:
+            if conversation:
                 try:
-                    final_response = self.deepseek_client.send_message(
-                        conversation=conversation,
-                        message=email_prompt,
-                        temperature=0.3,
-                        max_tokens=8192,
-                        error_default="Có lỗi xảy ra khi tạo phản hồi."
-                    )
+                    final_response = await self._ask_gemini(conversation, email_prompt)
                 except Exception as e:
                     logger.error(f"Error in conversation-based response generation: {e}")
                     final_response = "Xin lỗi, có lỗi xảy ra trong quá trình tạo phản hồi. Vui lòng thử lại sau."
@@ -837,7 +1001,7 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
             
         except Exception as e:
             logger.error(f"Error generating email response with Gemini: {e}")
-            return f"Xin lỗi, có lỗi xảy ra khi tạo email phản hồi. Vui lòng liên hệ trực tiếp để được hỗ trợ.\n\nTrân trọng,\n{settings.GMAIL_EMAIL_ADDRESS or 'Phòng Công tác Sinh viên'}"
+            return f"Xin lỗi, có lỗi xảy ra khi tạo email phản hồi. Vui lòng liên hệ trực tiếp để được hỗ trợ.\\n\\nTrân trọng,\\n{settings.GMAIL_EMAIL_ADDRESS or 'Phòng Công tác Sinh viên'}"
 
     async def create_draft_email(self, to: str, subject: str, body: str, thread_id: str = None) -> str:
         """
@@ -870,7 +1034,7 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
             
             if thread_id:
                 draft_body['message']['threadId'] = thread_id
-                logger.info(f"Linking draft to thread: {thread_id}")
+                logger.debug(f"Linking draft to thread: {thread_id}")
             else:
                 logger.warning("No thread_id provided - draft will not be linked to any thread")
                 
@@ -881,26 +1045,29 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
             
             draft_id = draft['id']
             
-            logger.info(f"Draft created with ID: {draft_id} {'(linked to thread: ' + thread_id + ')' if thread_id else '(no thread link)'}")
+            logger.debug(f"Draft created with ID: {draft_id} {'(linked to thread: ' + thread_id + ')' if thread_id else '(no thread link)'}")
             return draft_id
             
         except Exception as e:
-            logger.error(f"Error creating draft: {e}")
-            raise
+            logger.error(f"Error getting thread by draft ID: {e}")
+            return None
             
     
-    def _save_query_processing_log(self, text_content: str, results: List, leaf_extraction_data: List, final_response: str, session_id: str) -> None:
+    def _save_query_processing_log(self, text_content: str, results: List, content_evaluation_data: List, final_response: str, session_id: str) -> None:
         try:
-            leaf_content_map = {}
-            for query, original_item, leaf_info in leaf_extraction_data:
-                if leaf_info.get("is_relevant", False):
-                    if query not in leaf_content_map:
-                        leaf_content_map[query] = []
-                    leaf_content_map[query].append(leaf_info.get("leaf_content", ""))
+            relevant_content_map = {}
+            for query, chunk, extraction_result in content_evaluation_data:
+                if extraction_result.get("is_relevant", False):
+                    if query not in relevant_content_map:
+                        relevant_content_map[query] = []
+                    relevant_content_map[query].append(extraction_result.get("relevant_content", ""))
             
             for i, result in enumerate(results):
                 query = result.original_query
-                safe_query_name = "".join(c for c in query if c.isalnum() or c in (' ', '-', '_')).rstrip()[:50]
+                # Make filename safe for Windows and other filesystems
+                safe_query_name = "".join(c if c.isalnum() else '_' for c in query).strip('_')[:50]
+                if not safe_query_name:
+                    safe_query_name = "query"
                 query_folder_name = f"query_{i+1:02d}_{safe_query_name}"
                 query_folder = QUERY_LOG_DIR / session_id / query_folder_name
                 query_folder.mkdir(parents=True, exist_ok=True)
@@ -914,10 +1081,10 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
                 with open(query_folder / "01_search_results.json", 'w', encoding='utf-8') as f:
                     json.dump(query_results_data, f, ensure_ascii=False, indent=2)
                 
-                leaf_data = {"query": query, "leaf_contents": leaf_content_map.get(query, [])}
+                extracted_data = {"query": query, "relevant_contents": relevant_content_map.get(query, [])}
                 
-                with open(query_folder / "02_leaf_content.json", 'w', encoding='utf-8') as f:
-                    json.dump(leaf_data, f, ensure_ascii=False, indent=2)
+                with open(query_folder / "02_relevant_content.json", 'w', encoding='utf-8') as f:
+                    json.dump(extracted_data, f, ensure_ascii=False, indent=2)
             
             logger.info(f"Saved {len(results)} query folders in session: {session_id}")
             
@@ -957,7 +1124,7 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
 
             # Step 1: Filtering & Extraction
             retrieved_info = ""
-            leaf_extraction_tasks = []
+            content_evaluation_tasks = []
 
             for result in results:
                 query = result.original_query
@@ -965,21 +1132,21 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
                     for item in result.results:
                         content = item.get("content", "")
                         if content:
-                            task = self._evaluate_and_extract_leaf_info(query, content)
-                            leaf_extraction_tasks.append((query, item, task))
+                            task = self._evaluate_and_extract_relevant_content(query, content)
+                            content_evaluation_tasks.append((query, item, task))
             
-            leaf_extraction_data = []
-            if leaf_extraction_tasks:
-                logger.info(f"Extracting 'Core Snippets' from {len(leaf_extraction_tasks)} retrieved chunks...")
-                extracted_leaves = await asyncio.gather(*(task for _, _, task in leaf_extraction_tasks))
+            content_evaluation_data = []
+            if content_evaluation_tasks:
+                logger.info(f"Extracting 'Core Snippets' from {len(content_evaluation_tasks)} retrieved chunks...")
+                evaluation_results = await asyncio.gather(*(task for _, _, task in content_evaluation_tasks))
                 logger.info("Extraction complete.")
 
-                for (query, original_item, task), leaf_info in zip(leaf_extraction_tasks, extracted_leaves):
+                for (query, chunk, task), extraction_result in zip(content_evaluation_tasks, evaluation_results):
                     # Store for logging
-                    leaf_extraction_data.append((query, original_item, leaf_info))
+                    content_evaluation_data.append((query, chunk, extraction_result))
                     
-                    if leaf_info["is_relevant"]:
-                        metadata = original_item.get("metadata", {})
+                    if extraction_result["is_relevant"]:
+                        metadata = chunk.get("metadata", {})
                         file_created_at = metadata.get("file_created_at")
                         source = metadata.get("source")
 
@@ -989,7 +1156,7 @@ CHỈ TRẢ VỀ NỘI DUNG EMAIL:
                             retrieved_info += f" [Nguồn: {source}]"
                         if file_created_at:
                             retrieved_info += f" (Cập nhật: {file_created_at})"
-                        retrieved_info += f"\n---\n{leaf_info['leaf_content']}\n---\n\n"
+                        retrieved_info += f"\n---\n{extraction_result['relevant_content']}\n---\n\n"
 
             if not retrieved_info:
                 retrieved_info = "Hệ thống không tìm thấy thông tin cụ thể nào sau khi chắt lọc."
@@ -1015,7 +1182,7 @@ Người dùng đã đưa ra một yêu cầu/câu hỏi. Hệ thống đã tìm
 
 **NHIỆM VỤ:**
 Dựa trên **YÊU CẦU GỐC** và các **ĐOẠN TRÍCH CỐT LÕI**, hãy thực hiện các bước sau:
-1.  **Tổng hợp (Synthesize):** Đọc và hiểu tất cả các đoạn trích cốt lõi. Liên kết chúng lại để tạo thành một bức tranh toàn cảnh.
+1.  **Tổng hợp (Synthesize):** Đọc và hiểu tất cả các đoạn trích cốt lõi. Hãy kết hợp các thông tin trên thành một bài tổng hợp có logic và liền mạch.
 2.  **Lọc và Ưu tiên (Filter & Prioritize):** Nếu có thông tin mâu thuẫn, hãy ưu tiên thông tin có ngày cập nhật mới nhất.
 3.  **Soạn thảo (Draft):** Viết một câu trả lời hoàn chỉnh, duy nhất.
 
@@ -1023,7 +1190,7 @@ Dựa trên **YÊU CẦU GỐC** và các **ĐOẠN TRÍCH CỐT LÕI**, hãy th
 *   **Định dạng:** Chỉ sử dụng văn bản thuần (plain text). KHÔNG DÙNG MARKDOWN.
 *   **Cấu trúc:** Mở đầu ngắn gọn, đi thẳng vào nội dung chính, trả lời lần lượt từng ý trong yêu cầu của người dùng, và kết luận.
 *   **Trích dẫn ngày:** Khi sử dụng thông tin có ngày cập nhật, PHẢI ghi rõ trong câu trả lời (ví dụ: "Theo quy định cập nhật ngày 15/03/2024,...").
-*   **Trích dẫn nguồn:** Nếu thông tin có nguồn, hãy đánh số footnote trong câu trả lời (ví dụ: `...nội dung [1].`) và liệt kê danh sách nguồn ở cuối cùng dưới tiêu đề `NGUỒN THAM KHẢO:`. Nếu không có thông tin nào được trích xuất từ nguồn, **TUYỆT ĐỐI KHÔNG** hiển thị mục "NGUỒN THAM KHẢO".
+*   **Trích dẫn nguồn:** Nếu thông tin có nguồn, hãy đánh số footnote trong câu trả lời (ví dụ: `...nội dung [1].`) và liệt kê danh sách nguồn ở cuối cùng dưới tiêu đề `NGUỒN THAM KHẢO:`. Nếu không có thông tin nào được trích xuất từ nguồn tham khảo, **TUYỆT ĐỐI KHÔNG** hiển thị mục "NGUỒN THAM KHẢO".
 *   **Trung thực:** Nếu sau khi chắt lọc vẫn không có thông tin cho một ý nào đó, hãy nói rõ "Hiện tại hệ thống không tìm thấy thông tin chi tiết về...".
 
 Viết câu trả lời cuối cùng ngay dưới đây.
@@ -1031,9 +1198,10 @@ Viết câu trả lời cuối cùng ngay dưới đây.
 """
 
             final_response = "Có lỗi xảy ra khi tạo phản hồi."
-            if conversation and self.deepseek_client:
+            deepseek_client = self._get_deepseek_client()
+            if conversation and deepseek_client:
                 try:
-                    final_response = self.deepseek_client.send_message(
+                    final_response = deepseek_client.send_message(
                         conversation=conversation,
                         message=final_prompt,
                         temperature=0.3,
@@ -1048,7 +1216,7 @@ Viết câu trả lời cuối cùng ngay dưới đây.
                 final_response = "Không có context cuộc hội thoại để tạo phản hồi."
             
             # Save logs
-            self._save_query_processing_log(text_content, results, leaf_extraction_data, final_response, session_id)
+            self._save_query_processing_log(text_content, results, content_evaluation_data, final_response, session_id)
             
             return final_response
             
@@ -1056,13 +1224,10 @@ Viết câu trả lời cuối cùng ngay dưới đây.
             logger.warning(f"Error processing text with Vietnamese Query Module: {e}")
             return "Xin lỗi, có lỗi xảy ra khi xử lý văn bản. Vui lòng thử lại sau."
 
-    async def _evaluate_and_extract_leaf_info(self, query: str, chunk_content: str) -> Dict[str, Any]:
-        """
-        C-RAG evaluation: Critique if chunk is relevant, then extract key information.
-        Designed for concurrent execution without shared state.
-        """
-        if not query or not chunk_content or not self.deepseek_client:
-            return {"is_relevant": False, "leaf_content": ""}
+    async def _evaluate_and_extract_relevant_content(self, query: str, chunk_content: str) -> Dict[str, Any]:
+        deepseek_client = self._get_deepseek_client()
+        if not query or not chunk_content or not deepseek_client:
+            return {"is_relevant": False, "relevant_content": ""}
 
         try:
             system_message = "Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng trong hệ thống RAG."
@@ -1092,33 +1257,48 @@ Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau:
 ```json
 {{
   "is_relevant": <true nếu văn bản có liên quan, ngược lại false>,
-  "leaf_content": "<nội dung được trích xuất nếu is_relevant là true, ngược lại là chuỗi rỗng>"
+  "relevant_content": "<nội dung được trích xuất nếu is_relevant là true, ngược lại là chuỗi rỗng>"
 }}
 ```
 </instructions>
 """
             
             response_text = await call_deepseek_async(
-                deepseek_client=self.deepseek_client,
+                deepseek_client=deepseek_client,
                 system_message=system_message,
                 user_message=user_message,
                 temperature=0.0,
                 max_tokens=4000,
-                error_default='{"is_relevant": false, "leaf_content": ""}'
+                error_default='{"is_relevant": false, "relevant_content": ""}'
             )
             
-            # Clean and parse JSON
+            # Clean and parse JSON with better error handling
             response_text = response_text.strip()
+            
+            # Remove markdown code blocks if present
             if response_text.startswith("```json"):
                 response_text = response_text[7:]
+            elif response_text.startswith("```"):
+                response_text = response_text[3:]
             if response_text.endswith("```"):
                 response_text = response_text[:-3]
             
-            return json.loads(response_text.strip())
+            response_text = response_text.strip()
+            
+            # Try to find JSON object boundaries
+            start_idx = response_text.find("{")
+            end_idx = response_text.rfind("}")
+            if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                response_text = response_text[start_idx:end_idx + 1]
+            
+            # Clean control characters that might cause JSON parsing issues
+            response_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', response_text)
+            
+            return json.loads(response_text)
             
         except (json.JSONDecodeError, Exception) as e:
             logger.error(f"Error during C-RAG evaluation for query '{query}': {e}")
-            return {"is_relevant": False, "leaf_content": ""}
+            return {"is_relevant": False, "relevant_content": ""}
 
     def _search_multiple_collections(self, question: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
