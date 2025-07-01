@@ -397,14 +397,14 @@ class GmailHandler:
                 for result_item in search_results:
                     content = result_item.get("content", "") if isinstance(result_item, dict) else str(result_item)
                     if content:
-                        task = self._evaluate_and_extract_relevant_content(question, content)
+                        task = self._evaluate_and_extract_relevant_content(questions, content)
                         content_evaluation_tasks.append((question, result_item, task, "main"))
                 
                 # Create evaluation and extraction tasks for EMAIL_QA collection results  
                 for qa_item in qa_results:
                     qa_content = qa_item.get("content", "") if isinstance(qa_item, dict) else str(qa_item)
                     if qa_content:
-                        task = self._evaluate_and_extract_relevant_content(question, qa_content)
+                        task = self._evaluate_and_extract_relevant_content(questions, qa_content)
                         content_evaluation_tasks.append((question, qa_item, task, "qa"))
             
             # Execute all evaluation and extraction tasks concurrently
@@ -1116,13 +1116,15 @@ Trả về nội dung email phản hồi hoàn chỉnh dạng plain text.
             retrieved_info = ""
             content_evaluation_tasks = []
 
+            all_queries = [r.original_query for r in results]
+            
             for result in results:
                 query = result.original_query
                 if result.results:
                     for item in result.results:
                         content = item.get("content", "")
                         if content:
-                            task = self._evaluate_and_extract_relevant_content(query, content)
+                            task = self._evaluate_and_extract_relevant_content(all_queries, content)
                             content_evaluation_tasks.append((query, item, task))
             
             content_evaluation_data = []
@@ -1184,7 +1186,7 @@ Dựa trên **YÊU CẦU GỐC** và các **ĐOẠN TRÍCH CỐT LÕI**, hãy so
     -   **KHÔNG ĐƯỢC PHÉP** sử dụng bất kỳ định dạng Markdown nào (ví dụ: không dùng `**` để in đậm, không dùng `*` hay `-` hay số để tạo danh sách). Viết thành các đoạn văn bình thường.
 
 3.  **Trích dẫn nguồn:**
-    -   Khi sử dụng thông tin từ một đoạn trích, hãy đặt footnote dạng số (ví dụ: `...nội dung [1].`).
+    -   Khi sử dụng thông tin từ một đoạn trích, hãy đặt footnote dạng số (ví dụ: `...nội dung [1].`). Nếu cùng nguồn thì sẽ cùng footnote.
     -   Tạo một mục `NGUỒN THAM KHẢO:` ở cuối câu trả lời.
     -   Trong mục này, liệt kê tất cả các nguồn đã được trích dẫn. Mỗi nguồn phải bao gồm **toàn bộ link/tên nguồn** được cung cấp trong phần `[Nguồn: ...]` của đoạn trích.
 
@@ -1225,32 +1227,34 @@ Viết câu trả lời cuối cùng ngay dưới đây, tuân thủ nghiêm ng�
             logger.warning(f"Error processing text with Vietnamese Query Module: {e}")
             return "Xin lỗi, có lỗi xảy ra khi xử lý văn bản. Vui lòng thử lại sau."
 
-    async def _evaluate_and_extract_relevant_content(self, query: str, chunk_content: str) -> Dict[str, Any]:
+    async def _evaluate_and_extract_relevant_content(self, all_queries: List[str], chunk_content: str) -> Dict[str, Any]:
         deepseek_client = self._get_deepseek_client()
-        if not query or not chunk_content or not deepseek_client:
+        if not all_queries or not chunk_content or not deepseek_client:
             return {"is_relevant": False, "relevant_content": ""}
 
         try:
             system_message = "Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng trong hệ thống RAG."
             
+            queries_str = "\n".join(f"- {q}" for q in all_queries)
+
             user_message = f"""
 <instructions>
 **VAI TRÒ:**
 Bạn là một AI chuyên gia đánh giá và trích xuất thông tin, hoạt động như một bộ lọc chất lượng cao trong hệ thống RAG.
 
 **NHIỆM VỤ:**
-Bạn sẽ nhận được một **CÂU HỎI GỐC** và một **VĂN BẢN**. Nhiệm vụ của bạn là đánh giá mức độ liên quan của văn bản và trích xuất thông tin hữu ích nhất từ đó.
+Bạn sẽ nhận được một **DANH SÁCH CÁC CÂU HỎI GỐC** và một **VĂN BẢN**. Nhiệm vụ của bạn là đánh giá xem văn bản này có liên quan đến **BẤT KỲ CÂU HỎI NÀO** trong danh sách không, và nếu có, hãy trích xuất thông tin hữu ích nhất.
 
 **QUY TRÌNH THỰC HIỆN:**
-1.  **Đánh giá mức độ liên quan:** Đọc kỹ câu hỏi và văn bản. Quyết định xem văn bản này có chứa thông tin hữu ích để trả lời câu hỏi không. Thông tin không nhất thiết phải là câu trả lời trực tiếp, mà có thể là thông tin nền, giải thích, hoặc các chi tiết liên quan giúp làm sáng tỏ câu hỏi.
+1.  **Đánh giá mức độ liên quan:** Đọc kỹ danh sách câu hỏi và văn bản. Quyết định xem văn bản này có chứa thông tin hữu ích để trả lời **ít nhất một** trong các câu hỏi không. Thông tin không nhất thiết phải là câu trả lời trực tiếp, mà có thể là thông tin nền, giải thích, hoặc các chi tiết liên quan giúp làm sáng tỏ câu hỏi.
 2.  **Trích xuất thông tin:**
-    *   **Nếu văn bản có liên quan:** Hãy trích xuất một **đoạn trích cốt lõi**. Đoạn trích này nên mạch lạc, đầy đủ và chứa tất cả thông tin trong văn bản giúp trả lời câu hỏi một cách toàn diện. Thay vì chỉ lấy một câu trả lời ngắn gọn, hãy bao gồm cả ngữ cảnh xung quanh để người đọc hiểu rõ vấn đề. Đoạn trích phải được giữ nguyên văn từ văn bản gốc.
+    *   **Nếu văn bản có liên quan đến bất kỳ câu hỏi nào:** Hãy trích xuất một **đoạn trích cốt lõi**. Đoạn trích này nên mạch lạc, đầy đủ và chứa tất cả thông tin trong văn bản giúp trả lời (các) câu hỏi liên quan một cách toàn diện. Thay vì chỉ lấy một câu trả lời ngắn gọn, hãy bao gồm cả ngữ cảnh xung quanh để người đọc hiểu rõ vấn đề. Đoạn trích phải được giữ nguyên văn từ văn bản gốc.
     *   **Nếu văn bản không liên quan:** Trả về một chuỗi rỗng cho nội dung trích xuất.
 3.  **Định dạng đầu ra:** Trả về kết quả dưới dạng một đối tượng JSON duy nhất.
 
-**CÂU HỎI GỐC:**
+**DANH SÁCH CÁC CÂU HỎI GỐC:**
 ---
-{query}
+{queries_str}
 ---
 
 **VĂN BẢN CẦN ĐÁNH GIÁ VÀ TRÍCH XUẤT:**
@@ -1287,7 +1291,7 @@ Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau. Đ
             return json.loads(response_text.strip())
             
         except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Error during C-RAG evaluation for query '{query}': {e}")
+            logger.error(f"Error during C-RAG evaluation for query '{all_queries}': {e}")
             return {"is_relevant": False, "relevant_content": ""}
 
     def _search_multiple_collections(self, question: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -1308,14 +1312,13 @@ Chỉ trả về một đối tượng JSON hợp lệ với cấu trúc sau. Đ
         original_collection = self.query_module.embedding_module.qdrant_manager.collection_name
         
         try:
-            # Search in main collection (already configured)
             main_results = self.query_module.process_single_query(question)
             
             # Temporarily switch to EMAIL_QA collection
             self.query_module.embedding_module.qdrant_manager.collection_name = settings.EMAIL_QA_COLLECTION
             qa_results = self.query_module.process_single_query(question)
             
-            logger.debug(f"Found {len(main_results)} results in main collection and {len(qa_results)} results in EMAIL_QA collection for question: {question[:50]}...")
+            logger.info(f"Found {len(main_results)} results in main collection and {len(qa_results)} results in EMAIL_QA collection for question: {question[:50]}...")
             
             return main_results, qa_results
             

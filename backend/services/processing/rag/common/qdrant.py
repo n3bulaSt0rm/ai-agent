@@ -320,8 +320,8 @@ class QdrantManager:
     def hybrid_search(
         self, 
         query: str, 
-        candidates_limit: int = 10,
-        candidates_multiplier: int = 3
+        candidates_limit: int = 15,
+        candidates_multiplier: int = 4
     ) -> Dict[str, Any]:
         if not query.strip():
             return {

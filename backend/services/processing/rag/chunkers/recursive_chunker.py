@@ -93,15 +93,7 @@ class RecursiveChunker:
         refined_chunks = []
         global_chunk_id = 1
         
-        # DEBUG: Log detailed info about input chunks
         logger.info(f"RecursiveChunker processing {len(chunks)} chunks for file {file_id}")
-        for i, chunk in enumerate(chunks):
-            logger.info(f"  Chunk {i}: type={type(chunk)}, has_get={hasattr(chunk, 'get')}, has_page_content={hasattr(chunk, 'page_content')}")
-            if hasattr(chunk, 'page_content'):
-                logger.info(f"    - page_content length: {len(chunk.page_content) if chunk.page_content else 0}")
-                logger.info(f"    - metadata: {chunk.metadata}")
-            else:
-                logger.info(f"    - str representation: {str(chunk)[:200]}...")
         
         for parent_idx, parent_chunk in enumerate(chunks):
             try:
@@ -109,7 +101,7 @@ class RecursiveChunker:
                 if hasattr(parent_chunk, 'page_content'):
                     # This is a langchain Document object
                     content = parent_chunk.page_content or ''
-                    parent_chunk_id = parent_idx + 1  # Use 1-based index for langchain Documents
+                    parent_chunk_id = parent_idx + 1  
                 else:
                     # This is a dictionary
                     content = parent_chunk.get('content', '')

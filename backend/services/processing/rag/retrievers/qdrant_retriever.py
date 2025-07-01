@@ -39,11 +39,11 @@ class VietnameseQueryModule:
                  dense_model_name: str = "AITeamVN/Vietnamese_Embedding_v2",
                  sparse_model_name: str = "Qdrant/bm25",
                  limit: int = 5,
-                 candidates_limit: int = 10,
+                 candidates_limit: int = 15,
                  dense_weight: float = 0.8,
                  sparse_weight: float = 0.2,
                  normalization: str = "min_max",
-                 candidates_multiplier: int = 3):
+                 candidates_multiplier: int = 4):
         
         self.embedding_module = embedding_module
         self.limit = limit
@@ -279,9 +279,9 @@ class VietnameseQueryModule:
             logger.error(f"Error in reranking: {e}")
             return results[:top_k]
         
-    def retrieve(self, query: str, limit: int = 5, candidates_limit: int = 10, 
+    def retrieve(self, query: str, limit: int = 5, candidates_limit: int = 15, 
                dense_weight: float = 0.7, sparse_weight: float = 0.3, 
-               normalization: str = "min_max", candidates_multiplier: int = 3) -> List[Dict[str, Any]]:
+               normalization: str = "min_max", candidates_multiplier: int = 4) -> List[Dict[str, Any]]:
         if not query.strip():
             return []
         
@@ -597,11 +597,11 @@ def create_query_module(
     dense_model_name: str = "AITeamVN/Vietnamese_Embedding_v2",
     sparse_model_name: str = "Qdrant/bm25",
     limit: int = 5,
-    candidates_limit: int = 10,
+    candidates_limit: int = 15,
     dense_weight: float = 0.8,
     sparse_weight: float = 0.2,
     normalization: str = "min_max",
-    candidates_multiplier: int = 3
+    candidates_multiplier: int = 4
 ) -> VietnameseQueryModule:
     return VietnameseQueryModule(
         embedding_module=embedding_module,

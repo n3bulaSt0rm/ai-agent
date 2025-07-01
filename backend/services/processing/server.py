@@ -295,40 +295,6 @@ def create_markdown_chunks(markdown_content: str) -> List[Dict[str, Any]]:
     
     logger.info(f"Created {len(markdown_chunks)} markdown chunks")
     
-    # DEBUG: Save markdown chunks to file for debugging
-    try:
-        import json
-        from datetime import datetime
-        debug_file = LOG_DIR / f"debug_markdown_chunks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        # Convert to serializable format for debugging
-        debug_data = []
-        for i, chunk in enumerate(markdown_chunks):
-            chunk_info = {
-                "index": i,
-                "type": str(type(chunk)),
-                "attributes": dir(chunk) if hasattr(chunk, '__dict__') else "N/A"
-            }
-            
-            if hasattr(chunk, 'page_content'):
-                chunk_info["page_content"] = chunk.page_content[:200] + "..." if len(chunk.page_content) > 200 else chunk.page_content
-                chunk_info["metadata"] = chunk.metadata
-            elif hasattr(chunk, 'get'):
-                chunk_info["content"] = chunk.get('content', '')[:200] + "..." if len(chunk.get('content', '')) > 200 else chunk.get('content', '')
-                chunk_info["chunk_id"] = chunk.get('chunk_id', 'N/A')
-            else:
-                chunk_info["raw_data"] = str(chunk)[:200] + "..."
-                
-            debug_data.append(chunk_info)
-        
-        with open(debug_file, 'w', encoding='utf-8') as f:
-            json.dump(debug_data, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"DEBUG: Saved markdown chunks debug info to {debug_file}")
-        
-    except Exception as e:
-        logger.error(f"DEBUG: Failed to save markdown chunks debug info: {e}")
-    
     return markdown_chunks
 
 
@@ -347,43 +313,6 @@ def process_markdown_chunks(
         List[Dict[str, Any]]: List of processed chunks
     """
     logger.info(f"Processing chunks using {CHUNKER_TYPE} chunker")
-    
-    # DEBUG: Save input to chunker for debugging
-    try:
-        import json
-        from datetime import datetime
-        debug_file = LOG_DIR / f"debug_before_chunker_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        # Convert to serializable format for debugging
-        debug_data = {
-            "file_id": file_id,
-            "chunker_type": CHUNKER_TYPE,
-            "input_chunks_count": len(markdown_chunks),
-            "input_chunks": []
-        }
-        
-        for i, chunk in enumerate(markdown_chunks):
-            chunk_info = {
-                "index": i,
-                "type": str(type(chunk)),
-                "has_page_content": hasattr(chunk, 'page_content'),
-                "has_get_method": hasattr(chunk, 'get'),
-                "str_representation": str(chunk)[:300] + "..."
-            }
-            
-            if hasattr(chunk, 'page_content'):
-                chunk_info["page_content_length"] = len(chunk.page_content) if chunk.page_content else 0
-                chunk_info["metadata"] = chunk.metadata
-            
-            debug_data["input_chunks"].append(chunk_info)
-        
-        with open(debug_file, 'w', encoding='utf-8') as f:
-            json.dump(debug_data, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"DEBUG: Saved before-chunker debug info to {debug_file}")
-        
-    except Exception as e:
-        logger.error(f"DEBUG: Failed to save before-chunker debug info: {e}")
     
     chunks = modules.universal_chunker.process_chunks(markdown_chunks, file_id)
     

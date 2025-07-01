@@ -38,7 +38,7 @@ def delete_points_by_file_id(file_id: str):
         qdrant_manager = QdrantManager(
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT,
-            collection_name=settings.QDRANT_COLLECTION_NAME,
+            collection_name=settings.EMAIL_QA_COLLECTION,
             vector_size=settings.VECTOR_SIZE,
             dense_encoder=None,  # Not needed for deletion
             sparse_encoder=None  # Not needed for deletion
@@ -51,7 +51,7 @@ def delete_points_by_file_id(file_id: str):
             next_page_offset = None
             while True:
                 search_results = qdrant_manager.client.scroll(
-                    collection_name=settings.QDRANT_COLLECTION_NAME,
+                    collection_name=settings.EMAIL_QA_COLLECTION,
                     scroll_filter=Filter(
                         must=[
                             FieldCondition(key="file_id", match=MatchValue(value=file_id))
@@ -93,7 +93,7 @@ def delete_points_by_file_id(file_id: str):
 
 if __name__ == "__main__":
     # Get file_id from command line or use default
-    file_id = sys.argv[1] if len(sys.argv) > 1 else "197c20e13e71011d,197c21d6b8c96c0f"
+    file_id = sys.argv[1] if len(sys.argv) > 1 else "197c37f314f724ca,197c3a27683dbb22"
     
     logger.info(f"Starting deletion of points with file_id: {file_id}")
     delete_points_by_file_id(file_id)

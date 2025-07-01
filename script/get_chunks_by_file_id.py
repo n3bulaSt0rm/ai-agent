@@ -89,7 +89,7 @@ def main():
     print("=" * 60)
     
     # Target file_id
-    target_file_id = "197c20e13e71011d,197c21d6b8c96c0fembedd"
+    target_file_id = "4d25fd70-ef42-4f55-a84f-4817f046c67d"
     
     # Check both collections
     collections_to_check = [
@@ -114,7 +114,7 @@ def main():
     print(f"   Target file_id: {target_file_id}")
     
     # Also try shorter file_id (just the thread_id part)
-    thread_id_only = "197c20e13e71011d,197c21d6b8c96c0f"
+    thread_id_only = "4d25fd70-ef42-4f55-a84f-4817f046c67d_20250701_075706"
     print(f"\n🔍 Also checking with thread_id only: {thread_id_only}")
     
     for collection in collections_to_check:

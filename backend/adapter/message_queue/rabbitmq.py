@@ -37,7 +37,9 @@ class RabbitMQClient:
                 port=settings.RABBITMQ_PORT,
                 virtual_host=settings.RABBITMQ_VHOST,
                 credentials=self.credentials,
-                ssl_options=self.ssl_options
+                ssl_options=self.ssl_options,
+                heartbeat=600, 
+                blocked_connection_timeout=300 
             )
             
             # Connection and channel are created when needed
